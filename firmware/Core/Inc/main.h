@@ -41,6 +41,12 @@ extern "C" {
 #define SD_MOSI_PIN              GPIO_PIN_12
 #define SD_MOSI_GPIO_PORT        GPIOC
 
+/* ST-LINK V3 Virtual COM Port Pins (LPUART1) */
+#define VCP_TX_PIN               GPIO_PIN_2
+#define VCP_TX_GPIO_PORT         GPIOA
+#define VCP_RX_PIN               GPIO_PIN_3
+#define VCP_RX_GPIO_PORT         GPIOA
+
 void Error_Handler(void);
 
 #ifdef __cplusplus

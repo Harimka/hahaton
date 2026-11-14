@@ -15,7 +15,7 @@ set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} ${ARM_FLAGS} -x assembler-with-cpp")
 
 # Linker flags
 set(LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/STM32G474RETX_FLASH.ld")
-set(CMAKE_EXE_LINKER_FLAGS "${ARM_FLAGS} -T${LINKER_SCRIPT} -specs=nano.specs -specs=nosys.specs -Wl,-Map=${PROJECT_NAME}.map,--cref -Wl,--gc-sections -lc -lm")
+set(CMAKE_EXE_LINKER_FLAGS "${ARM_FLAGS} -T${LINKER_SCRIPT} -specs=nano.specs -specs=nosys.specs -u _printf_float -Wl,-Map=${PROJECT_NAME}.map,--cref -Wl,--gc-sections -lc -lm")
 
 # Definitions
 add_definitions(
@@ -26,6 +26,8 @@ add_definitions(
 # Include Directories
 include_directories(
     Core/Inc
+    Drivers/bsp/Inc
+    Drivers/port/Inc
     Drivers/STM32G4xx_HAL_Driver/Inc
     Drivers/STM32G4xx_HAL_Driver/Inc/Legacy
     Drivers/CMSIS/Device/ST/STM32G4xx/Include
@@ -58,6 +60,9 @@ set(SOURCES
     Core/Src/main.cpp
     Core/Src/stm32g4xx_it.c
     Core/Src/system_stm32g4xx.c
+    Drivers/bsp/Src/lsm6ds3.cpp
+    Drivers/port/Src/stm32g4spi.cpp
+    Drivers/port/Src/stm32g4uart.cpp
     Drivers/CMSIS/Device/ST/STM32G4xx/Source/Templates/gcc/startup_stm32g474xx.s
     ${HAL_SOURCES}
 )
