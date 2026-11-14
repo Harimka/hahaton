@@ -39,3 +39,11 @@
 ## 4. Оформление кода
 * Язык кода и комментариев: **строго английский**.
 * Обязательна стандартная Doxygen-шапка (`@file`, `@author team-04`, `@brief`) и футер `END OF FILE`.
+
+---
+
+## 5. Регламент коммитов и GitLab (Skill `gitlab_workflow`)
+* Логин с email экранируется: `@` -> `%40` в HTTPS URL.
+* Ветка `main` в GitLab **защищена**: прямой пуш запрещен серверным хуком.
+* Доставка изменений в `main` выполняется через слияние (`--allow-unrelated-histories`) и Merge Request (через `git push -o merge_request.create ...`). Подробный чек-лист: [`.agents/skills/gitlab_workflow/SKILL.md`](.agents/skills/gitlab_workflow/SKILL.md).
+
