@@ -30,7 +30,7 @@ def find_stlink_port():
 def main():
     parser = argparse.ArgumentParser(description="Team-04 IMU Shock Recorder (500 Hz, 921600 baud)")
     parser.add_argument("--port", "-p", type=str, default=None, help="COM port (e.g. COM3 or /dev/ttyACM0)")
-    parser.add_argument("--baud", "-b", type=int, default=921600, help="Baud rate (default: 921600)")
+    parser.add_argument("--baud", "-b", type=int, default=230400, help="Baud rate (default: 230400)")
     parser.add_argument("--output", "-o", type=str, default="shock_test_data.csv", help="Output CSV filename")
     parser.add_argument("--duration", "-d", type=float, default=0.0, help="Record duration in seconds (0 = until Ctrl+C)")
     args = parser.parse_args()

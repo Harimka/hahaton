@@ -129,8 +129,8 @@ int main(void)
     uartPort.print("\r\n");
     uartPort.print("====================================================================\r\n");
     uartPort.print(" [Team-04] STM32G474RE Nucleo: High-Speed LSM6DS3 CSV Telemetry Stream\r\n");
-    uartPort.print(" SYSCLK: 170 MHz | SPI2: 5.31 MHz | UART: LPUART1 921600 8N1\r\n");
-    uartPort.print(" Rate: 500 Hz (2 ms) | Format: time_ms,ax,ay,az,gx,gy,gz\r\n");
+    uartPort.print(" SYSCLK: 170 MHz | SPI2: 5.31 MHz | UART: LPUART1 230400 8N1\r\n");
+    uartPort.print(" Rate: 250 Hz (4 ms) | Format: time_ms,ax,ay,az,gx,gy,gz\r\n");
     uartPort.print("====================================================================\r\n\r\n");
 
     /* Probe LSM6DS3 */
@@ -153,7 +153,7 @@ int main(void)
         uartPort.print("[HINT] Check wiring: PB12=CS, PB13=SCK, PB14=SDO, PB15=SDI, 3.3V, GND\r\n");
     }
 
-    uartPort.print("\r\n[STREAM] Starting high-speed CSV stream (500 Hz)...\r\n");
+    uartPort.print("\r\n[STREAM] Starting high-speed CSV stream (250 Hz)...\r\n");
     uartPort.print("time_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\r\n");
 
     uint32_t lastLogTick = HAL_GetTick();
@@ -164,8 +164,8 @@ int main(void)
     {
         const uint32_t currentTick = HAL_GetTick();
 
-        /* Stream IMU measurements at 500 Hz (every 2 ms) */
-        if ((currentTick - lastLogTick) >= 2U)
+        /* Stream IMU measurements at 250 Hz (every 4 ms) */
+        if ((currentTick - lastLogTick) >= 4U)
         {
             lastLogTick = currentTick;
 
@@ -189,8 +189,8 @@ int main(void)
                                     imuData.accelX_g, imuData.accelY_g, imuData.accelZ_g,
                                     imuData.gyroX_dps, imuData.gyroY_dps, imuData.gyroZ_dps);
 
-                    /* Toggle heartbeat LED once every 250 samples (~every 500 ms) */
-                    if ((sampleCounter % 250U) == 0U) {
+                    /* Toggle heartbeat LED once every 125 samples (~every 500 ms) */
+                    if ((sampleCounter % 125U) == 0U) {
                         HAL_GPIO_TogglePin(LED_GPIO_PORT, LED_PIN);
                     }
                 }
@@ -282,7 +282,7 @@ static void MX_LPUART1_UART_Init(void)
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
     hlpuart1.Instance = LPUART1;
-    hlpuart1.Init.BaudRate = 921600;
+    hlpuart1.Init.BaudRate = 230400;
     hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
     hlpuart1.Init.StopBits = UART_STOPBITS_1;
     hlpuart1.Init.Parity = UART_PARITY_NONE;
