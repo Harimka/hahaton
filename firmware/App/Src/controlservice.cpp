@@ -35,11 +35,44 @@ void ControlService::poll() {
     while (rxTail_ != rxHead_) {
         const uint8_t value = rx_[rxTail_];
         rxTail_ = static_cast<uint16_t>((rxTail_ + 1U) % kRxCapacity);
-        parseByte(value);
+        if (asciiMode_ && frameState_ == 0U && value != kSof) {
+            parseAsciiByte(value);
+        } else {
+            parseByte(value);
+        }
     }
     if (streaming_ || calibrationRequested_) {
         const CaptureBlock* block = capture_.peek();
         if (block != nullptr) { consume(*block); capture_.release(); }
+    }
+}
+void ControlService::parseAsciiByte(uint8_t byte) {
+    if (byte == '\r' || byte == '\n') {
+        if (asciiLength_ != 0U) { asciiCommand_[asciiLength_] = '\0'; handleAsciiCommand(); asciiLength_ = 0U; }
+        return;
+    }
+    if (asciiLength_ + 1U < sizeof(asciiCommand_) && byte >= 0x20U && byte <= 0x7eU) {
+        asciiCommand_[asciiLength_++] = static_cast<char>(byte);
+    } else if (byte < 0x20U || byte > 0x7eU) {
+        asciiLength_ = 0U;
+    }
+}
+void ControlService::handleAsciiCommand() {
+    if (std::strcmp(asciiCommand_, "START") == 0 || std::strcmp(asciiCommand_, "START_STREAM") == 0) {
+        streaming_ = true; textMode_ = true; return;
+    }
+    if (std::strcmp(asciiCommand_, "STOP") == 0 || std::strcmp(asciiCommand_, "STOP_STREAM") == 0) {
+        streaming_ = false; return;
+    }
+    if (std::strcmp(asciiCommand_, "STATUS") == 0) { reportStats(); return; }
+    if (std::strcmp(asciiCommand_, "RESET") == 0 || std::strcmp(asciiCommand_, "RESET_ORIENTATION") == 0) { resetCalibration(); return; }
+    if (std::strcmp(asciiCommand_, "CALIBRATE") == 0 || std::strcmp(asciiCommand_, "CALIBRATE_ALL") == 0) {
+        calibrationSamples_ = 0U; calibrationAxis_ = 3U; calibrationRequested_ = true;
+        calibrationSum_[0] = calibrationSum_[1] = calibrationSum_[2] = 0; return;
+    }
+    if (std::strncmp(asciiCommand_, "CALIBRATE_AXIS ", 15U) == 0 && asciiCommand_[15] >= '0' && asciiCommand_[15] <= '2') {
+        calibrationSamples_ = 0U; calibrationAxis_ = static_cast<uint8_t>(asciiCommand_[15] - '0'); calibrationRequested_ = true;
+        calibrationSum_[0] = calibrationSum_[1] = calibrationSum_[2] = 0;
     }
 }
 void ControlService::parseByte(uint8_t byte) {

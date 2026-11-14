@@ -39,6 +39,8 @@ private:
     bool send(FrameType type, const uint8_t* payload, uint16_t length);
     bool sendResult(Command command, Result result);
     void resetCalibration();
+    void parseAsciiByte(uint8_t byte);
+    void handleAsciiCommand();
     SerialDrv& serial_;
     FifoCapture& capture_;
     uint8_t rx_[kRxCapacity]{};
@@ -51,7 +53,10 @@ private:
     uint16_t payloadLength_ = 0U;
     uint8_t frameType_ = 0U;
     uint8_t frameState_ = 0U;
-    bool streaming_ = false;
+    bool asciiMode_ = true;
+    char asciiCommand_[32]{};
+    uint8_t asciiLength_ = 0U;
+    bool streaming_ = true;
     bool textMode_ = true;
     bool calibrationRequested_ = false;
     uint16_t calibrationSamples_ = 0U;
