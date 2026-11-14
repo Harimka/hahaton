@@ -8,6 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(BSP_INC "${CMAKE_CURRENT_LIST_DIR}/Drivers/bsp/Inc")
 set(BSP_SRC "${CMAKE_CURRENT_LIST_DIR}/Drivers/bsp/Src")
+set(APP_INC "${CMAKE_CURRENT_LIST_DIR}/App/Inc")
+set(APP_SRC "${CMAKE_CURRENT_LIST_DIR}/App/Src")
 add_library(driver_core STATIC
     "${BSP_SRC}/lsm6ds3_c.c"
     "${BSP_SRC}/fifocapture_c.c"
@@ -30,3 +32,9 @@ add_executable(sdcard_test "${BSP_SRC}/sdcard.cpp" tests/sdcard_test.cpp)
 target_link_libraries(sdcard_test PRIVATE driver_core)
 target_compile_options(sdcard_test PRIVATE -Wall -Wextra -Werror -pedantic)
 add_test(NAME sdcard_test COMMAND sdcard_test)
+add_executable(controlservice_test
+    "${BSP_SRC}/lsm6ds3.cpp" "${BSP_SRC}/fifocapture.cpp" "${APP_SRC}/controlservice.cpp" tests/controlservice_test.cpp)
+target_include_directories(controlservice_test PRIVATE "${APP_INC}")
+target_link_libraries(controlservice_test PRIVATE driver_core)
+target_compile_options(controlservice_test PRIVATE -Wall -Wextra -Werror -pedantic)
+add_test(NAME controlservice_test COMMAND controlservice_test)

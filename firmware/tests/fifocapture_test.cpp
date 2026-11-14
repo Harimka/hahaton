@@ -65,25 +65,25 @@ int main() {
     Lsm6ds3 sensor(spi); assert(sensor.configure() == IoStatus::kOk);
     assert(spi.regs[0x13] == 0U && spi.regs[0x10] == 0xa4U);
     assert(sensor.configureFifo(FifoCapture::kBatchSamples) == IoStatus::kOk);
-    assert(spi.regs[0x06] == 48U && spi.regs[0x08] == 1U && spi.regs[0x0a] == 0x56U);
+    assert(spi.regs[0x06] == 96U && spi.regs[0x08] == 0x09U && spi.regs[0x0a] == 0x56U);
     assert(sensor.enableFifoInterrupt(true) == IoStatus::kOk && spi.regs[0x0d] == 8U);
     static FifoCapture capture(spi, clock, critical);
-    capture.onWatermark(); status(capture, spi, 48); data(capture, spi, clock); status(capture, spi, 0);
+    capture.onWatermark(); status(capture, spi, 96); data(capture, spi, clock); status(capture, spi, 0);
     const CaptureBlock* block = capture.peek(); assert(block && block->count == 16U && block->timestampsEstimated);
     assert(block->samples[0].rawX == -32768 && block->samples[0].rawY == 32767 && block->samples[0].rawZ == -1);
     assert((block->samples[0].flags & static_cast<uint8_t>(ImuFlag::kSaturation)) != 0U);
     assert(block->samples[1].sampleIndex == block->samples[0].sampleIndex + 1U);
     assert(block->samples[1].timestampUs - block->samples[0].timestampUs == 150U);
     capture.release(); assert(!capture.peek());
-    capture.onWatermark(); status(capture, spi, 48, 0x40); assert(capture.canRecover()); assert(capture.rearm());
-    capture.onWatermark(); status(capture, spi, 48); data(capture, spi, clock); status(capture, spi, 0);
+    capture.onWatermark(); status(capture, spi, 96, 0x40); assert(capture.canRecover()); assert(capture.rearm());
+    capture.onWatermark(); status(capture, spi, 96); data(capture, spi, clock); status(capture, spi, 0);
     block = capture.peek(); assert(block && (block->samples[0].flags & static_cast<uint8_t>(ImuFlag::kOverrun)));
     capture.release();
     capture.onWatermark(); clock.us += 6000U; capture.watchdog(5000U);
     assert(spi.abortCount == 1U && !capture.canRecover());
     spi.deselect(); capture.onAbortComplete(); assert(capture.canRecover() && capture.rearm());
     for (unsigned i = 0; i < FifoCapture::kSlots + 1U; ++i) {
-        capture.onWatermark(); status(capture, spi, 48); data(capture, spi, clock); status(capture, spi, 0);
+        capture.onWatermark(); status(capture, spi, 96); data(capture, spi, clock); status(capture, spi, 0);
     }
     CaptureStats stats = capture.snapshot();
     assert(stats.fifoOverruns == 1U && stats.dmaTimeouts == 1U && stats.droppedSamples == 16U);

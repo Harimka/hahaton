@@ -34,4 +34,10 @@ mkdir -p "$BUILD_DIR"
     "$SRC/sdcard.cpp" "$TESTS/sdcard_test.cpp" "$BUILD_DIR/sdcard_c.o" \
     -o "$BUILD_DIR/sdcard_test"
 "$BUILD_DIR/sdcard_test"
+
+"$CXX" -std=c++17 -Wall -Wextra -Werror -pedantic -I"$INC" -I"$ROOT/App/Inc" \
+    "$SRC/lsm6ds3.cpp" "$SRC/fifocapture.cpp" "$ROOT/App/Src/controlservice.cpp" \
+    "$TESTS/controlservice_test.cpp" "$BUILD_DIR/lsm6ds3_c.o" "$BUILD_DIR/fifocapture_c.o" \
+    -o "$BUILD_DIR/controlservice_test"
+"$BUILD_DIR/controlservice_test"
 printf '%s\n' 'All host driver tests passed.'

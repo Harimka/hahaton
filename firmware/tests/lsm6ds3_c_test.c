@@ -85,7 +85,7 @@ int main(void)
     assert(lsm6ds3_c_reset_poll(&driver, &complete) == LSM6DS3_C_OK && complete);
     assert(lsm6ds3_c_configure(&driver) == LSM6DS3_C_OK);
     assert(lsm6ds3_c_configure_fifo(&driver, 16U) == LSM6DS3_C_OK);
-    assert(mock.registers[0x06] == 48U && mock.registers[0x08] == 1U && mock.registers[0x0a] == 0x56U);
+    assert(mock.registers[0x06] == 96U && mock.registers[0x08] == 0x09U && mock.registers[0x0a] == 0x56U);
     assert(lsm6ds3_c_enable_fifo_interrupt(&driver, true) == LSM6DS3_C_OK);
     assert(mock.registers[0x0d] == 8U);
 

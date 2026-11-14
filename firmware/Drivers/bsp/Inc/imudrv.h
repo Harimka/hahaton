@@ -10,9 +10,9 @@ namespace team04 {
 struct ImuRawSample {
     uint32_t timestampUs;
     uint32_t sampleIndex;
-    int16_t rawX;
-    int16_t rawY;
-    int16_t rawZ;
+    int16_t rawX;  ///< Gyroscope X [raw LSB]
+    int16_t rawY;  ///< Gyroscope Y [raw LSB]
+    int16_t rawZ;  ///< Gyroscope Z [raw LSB]
     uint8_t flags;
 };
 #pragma pack(pop)

@@ -106,7 +106,7 @@ lsm6ds3_c_status_t lsm6ds3_c_configure(lsm6ds3_c_t *driver)
 {
     static const uint8_t registers[] = {REG_CTRL3_C, REG_CTRL2_G, REG_CTRL4_C, REG_CTRL6_C,
         REG_CTRL8_XL, REG_CTRL9_XL, REG_INT1_CTRL, REG_CTRL1_XL};
-    static const uint8_t values[] = {0x44U, 0U, 0U, 0U, 0U, 0x38U, 0U, 0xa4U};
+    static const uint8_t values[] = {0x44U, 0xacU, 0U, 0U, 0U, 0x38U, 0U, 0xa4U};
     static const uint8_t masks[] = {0x7eU, 0xf0U, 0x80U, 0x10U, 0xe4U, 0x38U, 0xffU, 0xffU};
     size_t i;
     lsm6ds3_c_status_t status;
@@ -154,12 +154,12 @@ lsm6ds3_c_status_t lsm6ds3_c_configure_fifo(lsm6ds3_c_t *driver, uint16_t waterm
     if (driver == NULL) return LSM6DS3_C_INVALID;
     if (!driver->configured) return LSM6DS3_C_NOT_READY;
     if (watermark_samples == 0U || watermark_samples > 1365U) return LSM6DS3_C_INVALID;
-    words = (uint16_t)(watermark_samples * 3U);
+    words = (uint16_t)(watermark_samples * 6U);
     registers[0] = REG_INT1_CTRL; registers[1] = REG_FIFO_CTRL5;
     registers[2] = REG_FIFO_CTRL1; registers[3] = REG_FIFO_CTRL2; registers[4] = REG_FIFO_CTRL3;
     registers[5] = REG_FIFO_CTRL4; registers[6] = REG_FIFO_CTRL5;
     values[0] = 0U; values[1] = 0U; values[2] = (uint8_t)words;
-    values[3] = (uint8_t)(words >> 8U); values[4] = 1U; values[5] = 0U; values[6] = 0x56U;
+    values[3] = (uint8_t)(words >> 8U); values[4] = 0x09U; values[5] = 0U; values[6] = 0x56U;
     for (i = 0U; i < 7U; ++i) {
         status = write_checked(driver, registers[i], values[i], masks[i]);
         if (status != LSM6DS3_C_OK) return status;
