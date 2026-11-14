@@ -5,7 +5,7 @@
 ---
 
 ## 1. Контекст, архитектурный стандарт и роли
-* **Стандарт индустрии:** C++17 Embedded (паттерн интерфейсов `ztlib` / `ztgd32` из референса `abs-3_console_fw`). См. подробности в [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+* **Стандарт индустрии:** C++17 Embedded (паттерн слоеных интерфейсов: Hardware Abstraction Layer, чисто виртуальные интерфейсы C++). См. подробности в [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 * **Аппаратная платформа:** См. [`docs/hardware/COMPONENTS_INFO.md`](docs/hardware/COMPONENTS_INFO.md) (STM32G474RE @ 170 МГц, LSM6DS3 по SPI2 6.66 кГц, SD по SPI3, LED PA5).
 * **Среда разработки:** STM32CubeMX + STM32CubeIDE (или расширение STM32 для VS Code).
 * **Зоны ответственности (не менять чужие модули!):**

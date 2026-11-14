@@ -1,334 +1,143 @@
 #!/usr/bin/env python3
 """
-Team-04 Continuous Serial Logger & IMU Telemetry Recorder
-Target: STM32G474RE Nucleo (ST-LINK VCP UART)
-Config: COM10 @ 230400 baud, 8-N-1
-
-Features:
-- Dual-Backend: Uses pyserial if installed, or native Windows Win32 API (ctypes) with ZERO dependencies!
-- Auto-Wait on Port Busy: If another program (e.g. Serial Monitor) is holding COM10 open,
-  it waits until you disconnect it and automatically attaches.
-- Zero memory leakage (streams straight to disk).
-- Periodic disk flush.
+Team-04 High-Speed Shock Telemetry Recorder & Live Plotter
+Reads 500 Hz CSV stream from STM32G474RE Nucleo over ST-LINK VCP UART at 921600 baud.
+Saves data to CSV and generates impact waveform plot.
 """
 
 import sys
-import os
 import time
 import argparse
-import datetime
+import csv
 
-# Try importing pyserial, otherwise fallback to native Win32 ctypes
-USE_PYSERIAL = False
 try:
     import serial
     import serial.tools.list_ports
-    USE_PYSERIAL = True
 except ImportError:
-    USE_PYSERIAL = False
+    print("[ERROR] pyserial is not installed. Install via: pip install pyserial")
+    sys.exit(1)
 
-# Native Win32 ctypes Serial Driver (Zero external dependencies on Windows)
-if not USE_PYSERIAL:
-    import ctypes
-    from ctypes import wintypes
-
-    class DCB(ctypes.Structure):
-        _fields_ = [
-            ("DCBlength", wintypes.DWORD),
-            ("BaudRate", wintypes.DWORD),
-            ("flags", wintypes.DWORD),
-            ("wReserved", wintypes.WORD),
-            ("XonLim", wintypes.WORD),
-            ("XoffLim", wintypes.WORD),
-            ("ByteSize", wintypes.BYTE),
-            ("Parity", wintypes.BYTE),
-            ("StopBits", wintypes.BYTE),
-            ("XonChar", ctypes.c_char),
-            ("XoffChar", ctypes.c_char),
-            ("ErrorChar", ctypes.c_char),
-            ("EofChar", ctypes.c_char),
-            ("EvtChar", ctypes.c_char),
-            ("wReserved1", wintypes.WORD),
-        ]
-
-    class COMMTIMEOUTS(ctypes.Structure):
-        _fields_ = [
-            ("ReadIntervalTimeout", wintypes.DWORD),
-            ("ReadTotalTimeoutMultiplier", wintypes.DWORD),
-            ("ReadTotalTimeoutConstant", wintypes.DWORD),
-            ("WriteTotalTimeoutMultiplier", wintypes.DWORD),
-            ("WriteTotalTimeoutConstant", wintypes.DWORD),
-        ]
-
-    class NativeWin32Serial:
-        def __init__(self, port: str, baudrate: int = 230400, timeout: float = 1.0):
-            self.port = port
-            self.baudrate = baudrate
-            self.timeout = timeout
-            self.port_path = f"\\\\.\\{port}" if not port.startswith("\\\\.\\") else port
-            self.handle = None
-            self._buffer = bytearray()
-            self._open()
-
-        def _open(self):
-            # GENERIC_READ (0x80000000) | GENERIC_WRITE (0x40000000) = 0xC0000000
-            self.handle = ctypes.windll.kernel32.CreateFileW(
-                self.port_path,
-                0xC0000000,
-                0,     # Exclusive access
-                None,
-                3,     # OPEN_EXISTING
-                0x80,  # FILE_ATTRIBUTE_NORMAL
-                None
-            )
-            if self.handle == -1 or self.handle == 0xFFFFFFFFFFFFFFFF:
-                err = ctypes.GetLastError()
-                self.handle = None
-                raise OSError(err, f"CreateFileW failed for {self.port} (WinError {err})")
-
-            dcb = DCB()
-            dcb.DCBlength = ctypes.sizeof(DCB)
-            config_str = f"baud={self.baudrate} parity=N data=8 stop=1"
-            if not ctypes.windll.kernel32.BuildCommDCBW(config_str, ctypes.byref(dcb)):
-                err = ctypes.GetLastError()
-                self.close()
-                raise OSError(err, f"BuildCommDCBW failed: {err}")
-
-            dcb.flags = 1  # fBinary = 1
-            if not ctypes.windll.kernel32.SetCommState(self.handle, ctypes.byref(dcb)):
-                err = ctypes.GetLastError()
-                self.close()
-                raise OSError(err, f"SetCommState failed: {err}")
-
-            # Buffer 64KB RX
-            ctypes.windll.kernel32.SetupComm(self.handle, 65536, 8192)
-
-            timeouts = COMMTIMEOUTS()
-            timeouts.ReadIntervalTimeout = 50
-            timeouts.ReadTotalTimeoutMultiplier = 0
-            timeouts.ReadTotalTimeoutConstant = int(self.timeout * 1000)
-            timeouts.WriteTotalTimeoutMultiplier = 0
-            timeouts.WriteTotalTimeoutConstant = 1000
-            ctypes.windll.kernel32.SetCommTimeouts(self.handle, ctypes.byref(timeouts))
-            ctypes.windll.kernel32.PurgeComm(self.handle, 0x0001 | 0x0002 | 0x0004 | 0x0008)
-
-        def read(self, size: int = 4096) -> bytes:
-            if not self.handle:
-                return b""
-            buf = ctypes.create_string_buffer(size)
-            n_read = wintypes.DWORD()
-            success = ctypes.windll.kernel32.ReadFile(
-                self.handle, buf, size, ctypes.byref(n_read), None
-            )
-            if success and n_read.value > 0:
-                return buf.raw[:n_read.value]
-            return b""
-
-        def readline(self) -> bytes:
-            start_t = time.time()
-            while b"\n" not in self._buffer:
-                chunk = self.read(4096)
-                if chunk:
-                    self._buffer.extend(chunk)
-                else:
-                    if (time.time() - start_t) >= self.timeout:
-                        break
-                    time.sleep(0.002)
-
-            if b"\n" in self._buffer:
-                idx = self._buffer.index(b"\n")
-                line = self._buffer[:idx + 1]
-                self._buffer = self._buffer[idx + 1:]
-                return bytes(line)
-            elif self._buffer:
-                line = bytes(self._buffer)
-                self._buffer.clear()
-                return line
-            return b""
-
-        def close(self):
-            if self.handle is not None and self.handle != -1:
-                ctypes.windll.kernel32.CloseHandle(self.handle)
-                self.handle = None
-
-
-def format_bytes(num_bytes: int) -> str:
-    for unit in ["B", "KB", "MB", "GB"]:
-        if num_bytes < 1024.0:
-            return f"{num_bytes:6.1f} {unit}"
-        num_bytes /= 1024.0
-    return f"{num_bytes:6.1f} TB"
-
-
-def open_serial_connection(port: str, baud: int, wait_for_port: bool = True):
-    """
-    Attempts to open the serial port.
-    If the port is locked by another window (Access Denied / Error 5),
-    it waits in a friendly loop until the user disconnects that window.
-    """
-    warned = False
-    while True:
-        try:
-            if USE_PYSERIAL:
-                ser = serial.Serial(
-                    port=port,
-                    baudrate=baud,
-                    bytesize=serial.EIGHTBITS,
-                    parity=serial.PARITY_NONE,
-                    stopbits=serial.STOPBITS_ONE,
-                    timeout=1.0,
-                    xonxoff=False,
-                    rtscts=False,
-                    dsrdtr=False
-                )
-                return ser
-            else:
-                return NativeWin32Serial(port=port, baudrate=baud, timeout=1.0)
-
-        except Exception as e:
-            err_msg = str(e)
-            is_busy = "Access is denied" in err_msg or "WinError 5" in err_msg or "PermissionError" in err_msg
-            if is_busy:
-                if not warned:
-                    print(f"\n" + "=" * 70)
-                    print(f" [PORT BUSY] Cannot open {port}: Access is denied (WinError 5)!")
-                    print(f" [CAUSE]     Another application has {port} open right now.")
-                    print(f"             (VS Code Serial Monitor / PuTTY / Arduino IDE)")
-                    print(f" [ACTION]    Please CLOSE or DISCONNECT that window now!")
-                    print(f"             Waiting for {port} to be released... (Ctrl+C to cancel)")
-                    print("=" * 70 + "\n")
-                    warned = True
-                if wait_for_port:
-                    print(f"\r  [WAITING] Retrying {port}... ", end="", flush=True)
-                    time.sleep(0.8)
-                    continue
-                else:
-                    raise
-            else:
-                raise
-
+def find_stlink_port():
+    ports = serial.tools.list_ports.comports()
+    for port in ports:
+        desc = (port.description or "") + (port.manufacturer or "")
+        if "STMicroelectronics" in desc or "ST-Link" in desc or "STM32" in desc:
+            return port.device
+    if ports:
+        return ports[0].device
+    return None
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Team-04 Serial Logger (COM10, 230400 8-N-1)"
-    )
-    parser.add_argument("--port", "-p", type=str, default="COM10", help="Serial port (default: COM10)")
+    parser = argparse.ArgumentParser(description="Team-04 IMU Shock Recorder (500 Hz, 921600 baud)")
+    parser.add_argument("--port", "-p", type=str, default=None, help="COM port (e.g. COM3 or /dev/ttyACM0)")
     parser.add_argument("--baud", "-b", type=int, default=230400, help="Baud rate (default: 230400)")
-    parser.add_argument("--output", "-o", type=str, default="serial_COM10.log", help="Output file (default: serial_COM10.log)")
-    parser.add_argument("--append", "-a", action="store_true", help="Append to file")
-    parser.add_argument("--timestamp", "-t", action="store_true", help="Add PC timestamp")
-    parser.add_argument("--echo-all", action="store_true", help="Echo every line to terminal")
-    parser.add_argument("--duration", "-d", type=float, default=0.0, help="Recording time in seconds (0 = infinite)")
-
+    parser.add_argument("--output", "-o", type=str, default="shock_test_data.csv", help="Output CSV filename")
+    parser.add_argument("--duration", "-d", type=float, default=0.0, help="Record duration in seconds (0 = until Ctrl+C)")
     args = parser.parse_args()
 
-    driver_name = "pyserial" if USE_PYSERIAL else "Native Win32 ctypes (Zero dependency)"
-    print(f"[INIT] Driver       : {driver_name}")
-    print(f"[INIT] Target Port  : {args.port} @ {args.baud} 8-N-1")
-    print(f"[INIT] Output file  : '{args.output}'")
-    if args.duration > 0:
-        print(f"[INIT] Duration     : {args.duration:.1f} seconds")
+    port = args.port
+    if not port:
+        port = find_stlink_port()
+        if not port:
+            print("[ERROR] No serial ports found! Please specify port with --port COMx")
+            sys.exit(1)
+        print(f"[INFO] Auto-detected ST-LINK port: {port}")
 
+    print(f"[INFO] Connecting to {port} @ {args.baud} baud...")
     try:
-        ser = open_serial_connection(args.port, args.baud, wait_for_port=True)
-    except KeyboardInterrupt:
-        print("\n[CANCELLED] Cancelled by user.")
-        sys.exit(0)
+        ser = serial.Serial(port, args.baud, timeout=1.0)
     except Exception as e:
-        print(f"\n[FATAL ERROR] {e}")
+        print(f"[ERROR] Could not open port {port}: {e}")
         sys.exit(1)
 
-    print(f"\n[SUCCESS] Connected to {args.port}! Recording stream...")
-    print("[INFO] Press Ctrl+C at any time to finish.\n")
+    print(f"[INFO] Connected! Recording to '{args.output}'...")
+    print("[INFO] Press Ctrl+C at any time to stop recording and generate plot.\n")
 
-    captured_samples = []
+    timestamps = []
+    ax_list, ay_list, az_list = [], [], []
+    gx_list, gy_list, gz_list = [], [], []
+
     count = 0
-    total_bytes = 0
     start_time = time.time()
-    last_flush_time = start_time
-    file_mode = "a" if args.append else "w"
 
-    try:
-        with open(args.output, file_mode, encoding="utf-8", errors="replace") as logfile:
-            if not args.append:
-                logfile.write(
-                    f"# Team-04 Log Started: {datetime.datetime.now().isoformat()}\n"
-                    f"# Port: {args.port} | Baud: {args.baud} 8-N-1\n"
-                )
-                logfile.flush()
+    with open(args.output, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["time_ms", "ax_g", "ay_g", "az_g", "gx_dps", "gy_dps", "gz_dps"])
 
+        try:
             while True:
-                raw_bytes = ser.readline()
-                if not raw_bytes:
-                    if args.duration > 0 and (time.time() - start_time) >= args.duration:
-                        break
-                    continue
-
-                line = raw_bytes.decode("utf-8", errors="replace").strip("\r\n")
+                line = ser.readline().decode("utf-8", errors="ignore").strip()
                 if not line:
                     continue
 
-                if args.timestamp:
-                    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-                    file_entry = f"[{now_str}] {line}"
-                else:
-                    file_entry = line
+                # Ignore banners and logs that start with [ or =
+                if line.startswith("[") or line.startswith("=") or line.startswith("time_ms"):
+                    print(f" [DEVICE] {line}")
+                    continue
 
-                logfile.write(file_entry + "\n")
-                count += 1
-                total_bytes += len(raw_bytes)
+                parts = line.split(",")
+                if len(parts) == 7:
+                    try:
+                        t = float(parts[0])
+                        ax, ay, az = float(parts[1]), float(parts[2]), float(parts[3])
+                        gx, gy, gz = float(parts[4]), float(parts[5]), float(parts[6])
 
-                if len(captured_samples) < 15:
-                    captured_samples.append(line)
+                        writer.writerow([t, ax, ay, az, gx, gy, gz])
+                        timestamps.append(t)
+                        ax_list.append(ax)
+                        ay_list.append(ay)
+                        az_list.append(az)
+                        gx_list.append(gx)
+                        gy_list.append(gy)
+                        gz_list.append(gz)
 
-                curr_time = time.time()
-                if (count % 50 == 0) or ((curr_time - last_flush_time) >= 1.0):
-                    logfile.flush()
-                    last_flush_time = curr_time
+                        count += 1
+                        if count % 100 == 0:
+                            print(f"\r  Recorded {count:05d} samples | Current: ax={ax:+6.2f}g ay={ay:+6.2f}g az={az:+6.2f}g", end="", flush=True)
 
-                is_system_msg = line.startswith("[") or line.startswith("=") or line.startswith("#")
+                        if args.duration > 0 and (time.time() - start_time) >= args.duration:
+                            break
 
-                if is_system_msg:
-                    print(f"\n[DEVICE] {line}")
-                elif args.echo_all:
-                    print(line)
-                else:
-                    if count % 25 == 0:
-                        elapsed = curr_time - start_time
-                        rate = (count / elapsed) if elapsed > 0 else 0.0
-                        size_str = format_bytes(total_bytes)
-                        preview = line[:40] + ("..." if len(line) > 40 else "")
-                        print(
-                            f"\r[LOG] {count:06d} lines | {size_str} | {rate:5.1f} L/s | Last: {preview:<43}",
-                            end="",
-                            flush=True
-                        )
+                    except ValueError:
+                        pass
+        except KeyboardInterrupt:
+            print("\n[INFO] Recording stopped by user.")
 
-                if args.duration > 0 and (curr_time - start_time) >= args.duration:
-                    print(f"\n\n[INFO] Duration {args.duration:.1f}s reached.")
-                    break
+    ser.close()
+    print(f"\n[SUCCESS] Saved {count} samples to '{args.output}'.")
 
-    except KeyboardInterrupt:
-        print("\n\n[INFO] Logging stopped by user (Ctrl+C).")
-    finally:
-        ser.close()
+    # Generate plot if matplotlib is available
+    if count > 10:
+        try:
+            import matplotlib.pyplot as plt
+            # Normalize time to start at 0
+            t0 = timestamps[0]
+            rel_t = [(t - t0) for t in timestamps]
 
-    elapsed_total = time.time() - start_time
-    avg_rate = (count / elapsed_total) if elapsed_total > 0 else 0.0
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+            fig.suptitle("Team-04 Test Bench IMU Shock Waveform (500 Hz)", fontsize=14, fontweight="bold")
 
-    print("\n" + "=" * 70)
-    print(f" [COMPLETE] Total lines captured: {count}")
-    print(f" [COMPLETE] Data size           : {format_bytes(total_bytes)}")
-    print(f" [COMPLETE] Elapsed time        : {elapsed_total:.2f} s ({avg_rate:.1f} lines/sec)")
-    print(f" [COMPLETE] Output saved to     : {os.path.abspath(args.output)}")
-    print("=" * 70)
+            ax1.plot(rel_t, ax_list, label="Ax [g]", color="red", alpha=0.8)
+            ax1.plot(rel_t, ay_list, label="Ay [g]", color="green", alpha=0.8)
+            ax1.plot(rel_t, az_list, label="Az [g]", color="blue", alpha=0.8)
+            ax1.set_ylabel("Acceleration [g]")
+            ax1.grid(True, linestyle="--", alpha=0.6)
+            ax1.legend(loc="upper right")
 
-    if captured_samples:
-        print("\n--- [PREVIEW: First captured lines] ---")
-        for s in captured_samples[:8]:
-            print("  " + s)
-        print("---------------------------------------")
+            ax2.plot(rel_t, gx_list, label="Gx [dps]", color="magenta", alpha=0.7)
+            ax2.plot(rel_t, gy_list, label="Gy [dps]", color="cyan", alpha=0.7)
+            ax2.plot(rel_t, gz_list, label="Gz [dps]", color="orange", alpha=0.7)
+            ax2.set_xlabel("Time [ms]")
+            ax2.set_ylabel("Angular Rate [dps]")
+            ax2.grid(True, linestyle="--", alpha=0.6)
+            ax2.legend(loc="upper right")
 
+            plt.tight_layout()
+            plot_file = args.output.replace(".csv", ".png")
+            plt.savefig(plot_file, dpi=150)
+            print(f"[SUCCESS] Waveform plot saved to '{plot_file}'!")
+        except ImportError:
+            print("[INFO] matplotlib not installed. CSV data is ready to plot in Excel.")
 
 if __name__ == "__main__":
     main()

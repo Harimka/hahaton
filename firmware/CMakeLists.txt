@@ -28,6 +28,8 @@ include_directories(
     Core/Inc
     Drivers/bsp/Inc
     Drivers/port/Inc
+    Middlewares/Third_Party/FatFs/src
+    FATFS/Target
     Drivers/STM32G4xx_HAL_Driver/Inc
     Drivers/STM32G4xx_HAL_Driver/Inc/Legacy
     Drivers/CMSIS/Device/ST/STM32G4xx/Include
@@ -63,6 +65,13 @@ set(SOURCES
     Drivers/bsp/Src/lsm6ds3.cpp
     Drivers/port/Src/stm32g4spi.cpp
     Drivers/port/Src/stm32g4uart.cpp
+    Drivers/port/Src/fatfsadapter.cpp
+    Drivers/bsp/Src/sdcard.cpp
+    Drivers/bsp/Src/sdcard_c.c
+    Middlewares/Third_Party/FatFs/src/ff.c
+    Middlewares/Third_Party/FatFs/src/diskio.c
+    Middlewares/Third_Party/FatFs/src/ff_gen_drv.c
+    Middlewares/Third_Party/FatFs/src/option/syscall.c
     Drivers/CMSIS/Device/ST/STM32G4xx/Source/Templates/gcc/startup_stm32g474xx.s
     ${HAL_SOURCES}
 )

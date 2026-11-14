@@ -12,19 +12,36 @@
 
 #include "main.h"
 #include <stdio.h>
+#include <string.h>
 #include "lsm6ds3.h"
 #include "stm32g4spi.h"
 #include "stm32g4uart.h"
+#include "sdcard.h"
+#include "fatfsadapter.h"
+#include "ff.h"
+#include "ff_gen_drv.h"
 
 /* Peripheral Handles */
 SPI_HandleTypeDef hspi2;
+SPI_HandleTypeDef hspi3;
 UART_HandleTypeDef hlpuart1;
+
+namespace {
+class MainClock final : public team04::ClockDrv {
+public:
+    ~MainClock() override = default;
+    uint32_t millis() const override { return HAL_GetTick(); }
+    uint32_t micros() const override { return HAL_GetTick() * 1000U; }
+};
+}
 
 /* Private function prototypes */
 static void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_LPUART1_UART_Init(void);
 static void MX_SPI2_Init(void);
+static void MX_SPI3_Init(void);
+static bool SD_Append(FIL* file, const char* text);
 
 /**
  * @brief Standard library syscalls stubs and _write redirection to LPUART1.
@@ -115,6 +132,8 @@ int main(void)
 
     /* Initialize SPI2 for LSM6DS3 IMU */
     MX_SPI2_Init();
+    /* Initialize SPI3 for the SD card */
+    MX_SPI3_Init();
 
     /* Ensure Chip Selects are inactive (HIGH) */
     HAL_GPIO_WritePin(IMU_CS_GPIO_PORT, IMU_CS_PIN, GPIO_PIN_SET);
@@ -122,8 +141,15 @@ int main(void)
 
     /* Construct BSP and Port driver objects statically */
     team04::Stm32G4Spi spiBus(hspi2, *IMU_CS_GPIO_PORT, IMU_CS_PIN);
+    team04::Stm32G4Spi sdBus(hspi3, *SD_CS_GPIO_PORT, SD_CS_PIN);
     team04::Stm32G4Uart uartPort(hlpuart1);
     team04::Lsm6ds3 imu(spiBus);
+    MainClock sdClock;
+    team04::SdCard sdCard(sdBus, sdClock);
+    team04::FatFsAdapter sdAdapter(sdCard);
+    FATFS sdFs{};
+    FIL sdFile{};
+    bool sdFileOpen = false;
 
     /* Print initial startup banner to UART */
     uartPort.print("\r\n");
@@ -151,6 +177,26 @@ int main(void)
         uartPort.printf("[ERROR] LSM6DS3 not detected (Status code: %u)!\r\n",
                         static_cast<unsigned>(status));
         uartPort.print("[HINT] Check wiring: PB12=CS, PB13=SCK, PB14=SDO, PB15=SDI, 3.3V, GND\r\n");
+    }
+
+    uartPort.print("[SD] Initializing SPI3 SD card...\r\n");
+    const bool sdMounted = sdAdapter.bind() &&
+        FATFS_LinkDriver(&team04::FatFsAdapter::kDriver, "0:") == 0U &&
+        f_mount(&sdFs, "0:", 1) == FR_OK;
+    if (sdMounted && f_open(&sdFile, "0:/imu.csv", FA_OPEN_APPEND | FA_WRITE) == FR_OK) {
+        sdFileOpen = true;
+        UINT written = 0U;
+        if (f_size(&sdFile) == 0U) {
+            const char* header = "time_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\r\n";
+            if (f_write(&sdFile, header, static_cast<UINT>(strlen(header)), &written) != FR_OK ||
+                written != static_cast<UINT>(strlen(header))) {
+                sdFileOpen = false;
+            }
+        }
+        uartPort.print(sdFileOpen ? "[SD] imu.csv opened for writing.\r\n"
+                                   : "[SD] ERROR: header write failed.\r\n");
+    } else {
+        uartPort.print("[SD] ERROR: mount/open failed; UART stream continues.\r\n");
     }
 
     uartPort.print("\r\n[STREAM] Starting high-speed CSV stream (250 Hz)...\r\n");
@@ -188,6 +234,20 @@ int main(void)
                                     currentTick,
                                     imuData.accelX_g, imuData.accelY_g, imuData.accelZ_g,
                                     imuData.gyroX_dps, imuData.gyroY_dps, imuData.gyroZ_dps);
+
+                    if (sdFileOpen) {
+                        char line[128];
+                        const int length = snprintf(line, sizeof(line), "%lu,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f\r\n",
+                                                    currentTick,
+                                                    imuData.accelX_g, imuData.accelY_g, imuData.accelZ_g,
+                                                    imuData.gyroX_dps, imuData.gyroY_dps, imuData.gyroZ_dps);
+                        if (length <= 0 || !SD_Append(&sdFile, line)) {
+                            uartPort.print("[SD] ERROR: file write failed.\r\n");
+                            sdFileOpen = false;
+                        } else if ((sampleCounter % 125U) == 0U) {
+                            (void)f_sync(&sdFile);
+                        }
+                    }
 
                     /* Toggle heartbeat LED once every 125 samples (~every 500 ms) */
                     if ((sampleCounter % 125U) == 0U) {
@@ -336,6 +396,42 @@ static void MX_SPI2_Init(void)
     {
         Error_Handler();
     }
+}
+
+static void MX_SPI3_Init(void)
+{
+    __HAL_RCC_SPI3_CLK_ENABLE();
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Pin = SD_SCK_PIN | SD_MISO_PIN | SD_MOSI_PIN;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF6_SPI3;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    hspi3.Instance = SPI3;
+    hspi3.Init.Mode = SPI_MODE_MASTER;
+    hspi3.Init.Direction = SPI_DIRECTION_2LINES;
+    hspi3.Init.DataSize = SPI_DATASIZE_8BIT;
+    hspi3.Init.CLKPolarity = SPI_POLARITY_LOW;
+    hspi3.Init.CLKPhase = SPI_PHASE_1EDGE;
+    hspi3.Init.NSS = SPI_NSS_SOFT;
+    hspi3.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256;
+    hspi3.Init.FirstBit = SPI_FIRSTBIT_MSB;
+    hspi3.Init.TIMode = SPI_TIMODE_DISABLE;
+    hspi3.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+    hspi3.Init.CRCPolynomial = 7;
+    hspi3.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
+    hspi3.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
+    if (HAL_SPI_Init(&hspi3) != HAL_OK) Error_Handler();
+}
+
+static bool SD_Append(FIL* file, const char* text)
+{
+    if (!file || !text) return false;
+    const UINT length = static_cast<UINT>(strlen(text));
+    UINT written = 0U;
+    return f_write(file, text, length, &written) == FR_OK && written == length;
 }
 
 /**

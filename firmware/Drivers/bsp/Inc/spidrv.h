@@ -1,67 +1,38 @@
-/**
- * @file    spidrv.h
- * @author  team-04
- * @brief   Abstract hardware-independent SPI bus interface and status types.
+/** @file spidrv.h
+ * @author team-04
+ * @brief Hardware-independent SPI, DMA and time interfaces.
  */
-
 #ifndef TEAM04_SPIDRV_H_
 #define TEAM04_SPIDRV_H_
-
 #include <stdint.h>
-
 namespace team04 {
-
-/**
- * @brief Return status for hardware I/O operations.
- */
-enum class IoStatus : uint8_t {
-    kOk = 0U,
-    kBusy,
-    kTimeout,
-    kError,
-    kNotReady,
-    kInvalid,
-    kUnsupported
-};
-
-/**
- * @brief Abstract SPI bus master driver interface.
- */
+enum class IoStatus : uint8_t { kOk, kBusy, kTimeout, kError, kNotReady, kInvalid, kUnsupported };
 class SpiDrv {
 public:
     SpiDrv() = default;
-    virtual ~SpiDrv() = default;
-
     SpiDrv(const SpiDrv&) = delete;
     SpiDrv& operator=(const SpiDrv&) = delete;
-
-    /**
-     * @brief Configure maximum SPI clock frequency in Hz.
-     */
     virtual IoStatus setClock(uint32_t maxHz) = 0;
-
-    /**
-     * @brief Assert Chip Select (Active LOW).
-     */
     virtual void select() = 0;
-
-    /**
-     * @brief Deassert Chip Select (Inactive HIGH).
-     */
     virtual void deselect() = 0;
-
-    /**
-     * @brief Full-duplex synchronous SPI transfer.
-     * @param tx Pointer to transmit buffer (nullptr sends 0xFF).
-     * @param rx Pointer to receive buffer (nullptr discards received data).
-     * @param len Transfer length in bytes.
-     * @param timeoutMs Maximum timeout in milliseconds.
-     */
+    /* nullptr TX sends 0xff; nullptr RX discards received data. */
     virtual IoStatus transfer(const uint8_t* tx, uint8_t* rx, uint16_t len, uint32_t timeoutMs) = 0;
+    /* DMA owns the buffers and selected CS until completion or abort callback. */
+    virtual IoStatus startDma(const uint8_t* tx, uint8_t* rx, uint16_t len) = 0;
+    virtual IoStatus abortDma() = 0;
+protected:
+    ~SpiDrv() = default;
 };
-
-} // namespace team04
-
-#endif // TEAM04_SPIDRV_H_
-
+class ClockDrv {
+public:
+    ClockDrv() = default;
+    ClockDrv(const ClockDrv&) = delete;
+    ClockDrv& operator=(const ClockDrv&) = delete;
+    virtual uint32_t millis() const = 0;
+    virtual uint32_t micros() const = 0;
+protected:
+    ~ClockDrv() = default;
+};
+}
+#endif
 /***************************** END OF FILE ************************************/
