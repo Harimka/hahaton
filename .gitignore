@@ -1,0 +1,22 @@
+# Build directories
+build/
+firmware/build/
+**/build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.ninja*
+ninja.build
+
+# Binary and output files
+*.o
+*.obj
+*.elf
+*.bin
+*.hex
+*.map
+*.d
+
+# Temporary files
+*.tmp
+*.log

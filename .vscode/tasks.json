@@ -1,0 +1,29 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build Firmware",
+            "type": "shell",
+            "command": "${workspaceFolder}/build.bat",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "Flash Firmware",
+            "type": "shell",
+            "command": "${workspaceFolder}/flash.bat",
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "Build and Flash",
+            "type": "shell",
+            "command": "${workspaceFolder}/flash.bat",
+            "group": "none",
+            "problemMatcher": "$gcc"
+        }
+    ]
+}
