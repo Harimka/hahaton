@@ -128,8 +128,9 @@ int main(void)
     /* Print initial startup banner to UART */
     uartPort.print("\r\n");
     uartPort.print("====================================================================\r\n");
-    uartPort.print(" [Team-04] STM32G474RE Nucleo Bring-up: LSM6DS3 IMU Telemetry Log\r\n");
-    uartPort.print(" SYSCLK: 170 MHz | SPI2: Mode 3 @ 5.31 MHz | UART: LPUART1 115200 8N1\r\n");
+    uartPort.print(" [Team-04] STM32G474RE Nucleo: High-Speed LSM6DS3 CSV Telemetry Stream\r\n");
+    uartPort.print(" SYSCLK: 170 MHz | SPI2: 5.31 MHz | UART: LPUART1 921600 8N1\r\n");
+    uartPort.print(" Rate: 500 Hz (2 ms) | Format: time_ms,ax,ay,az,gx,gy,gz\r\n");
     uartPort.print("====================================================================\r\n\r\n");
 
     /* Probe LSM6DS3 */
@@ -152,7 +153,8 @@ int main(void)
         uartPort.print("[HINT] Check wiring: PB12=CS, PB13=SCK, PB14=SDO, PB15=SDI, 3.3V, GND\r\n");
     }
 
-    uartPort.print("\r\n[STREAM] Starting telemetry stream (10 Hz)...\r\n");
+    uartPort.print("\r\n[STREAM] Starting high-speed CSV stream (500 Hz)...\r\n");
+    uartPort.print("time_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\r\n");
 
     uint32_t lastLogTick = HAL_GetTick();
     uint32_t sampleCounter = 0U;
@@ -162,8 +164,8 @@ int main(void)
     {
         const uint32_t currentTick = HAL_GetTick();
 
-        /* Stream IMU measurements at 10 Hz (every 100 ms) */
-        if ((currentTick - lastLogTick) >= 100U)
+        /* Stream IMU measurements at 500 Hz (every 2 ms) */
+        if ((currentTick - lastLogTick) >= 2U)
         {
             lastLogTick = currentTick;
 
@@ -172,9 +174,7 @@ int main(void)
                 uint8_t probeId = 0U;
                 if (imu.probe(probeId) == team04::IoStatus::kOk &&
                     imu.configure() == team04::IoStatus::kOk) {
-                    uartPort.print("[RECOVERED] LSM6DS3 reconnected and initialized successfully!\r\n");
-                } else {
-                    uartPort.printf("[WARN] Waiting for LSM6DS3... (WHO_AM_I: 0x%02X)\r\n", probeId);
+                    uartPort.print("time_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\r\n");
                 }
             } else {
                 team04::ImuScaledData imuData{};
@@ -183,17 +183,16 @@ int main(void)
                 if (readStatus == team04::IoStatus::kOk) {
                     sampleCounter++;
 
-                    /* Format and transmit 6-axis measurements */
-                    uartPort.printf("[%05lu] Accel[g]: X=%+7.3f Y=%+7.3f Z=%+7.3f | Gyro[dps]: X=%+7.1f Y=%+7.1f Z=%+7.1f\r\n",
-                                    sampleCounter,
+                    /* Format and transmit CSV stream */
+                    uartPort.printf("%lu,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f\r\n",
+                                    currentTick,
                                     imuData.accelX_g, imuData.accelY_g, imuData.accelZ_g,
                                     imuData.gyroX_dps, imuData.gyroY_dps, imuData.gyroZ_dps);
 
-                    /* Toggle heartbeat LED on each successfully read sample */
-                    HAL_GPIO_TogglePin(LED_GPIO_PORT, LED_PIN);
-                } else {
-                    uartPort.printf("[WARN] Failed to read IMU data (status: %u)\r\n",
-                                    static_cast<unsigned>(readStatus));
+                    /* Toggle heartbeat LED once every 250 samples (~every 500 ms) */
+                    if ((sampleCounter % 250U) == 0U) {
+                        HAL_GPIO_TogglePin(LED_GPIO_PORT, LED_PIN);
+                    }
                 }
             }
         }
@@ -283,7 +282,7 @@ static void MX_LPUART1_UART_Init(void)
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
     hlpuart1.Instance = LPUART1;
-    hlpuart1.Init.BaudRate = 115200;
+    hlpuart1.Init.BaudRate = 921600;
     hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
     hlpuart1.Init.StopBits = UART_STOPBITS_1;
     hlpuart1.Init.Parity = UART_PARITY_NONE;
