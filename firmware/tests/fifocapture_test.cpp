@@ -94,5 +94,11 @@ int main() {
     clock.us = 0xfffffff0U; capture.watchdog(5000U);
     clock.us = 100U; capture.watchdog(5000U);
     assert(capture.snapshot().timerWraps == 1U);
+    assert(capture.rearm());
+    spi.failStart = true;
+    capture.onWatermark();
+    assert(spi.selected && !capture.canRecover());
+    spi.deselect(); capture.onAbortComplete();
+    assert(capture.canRecover());
 }
 /***************************** END OF FILE ************************************/

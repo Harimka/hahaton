@@ -5,6 +5,7 @@
 #ifndef TEAM04_SDCARD_H_
 #define TEAM04_SDCARD_H_
 #include "storagedrv.h"
+#include "sdcard_c.h"
 namespace team04 {
 class SdCard final : public StorageDrv {
 public:
@@ -15,27 +16,21 @@ public:
     IoStatus read(uint32_t lba, uint8_t* buffer) override;
     IoStatus write(uint32_t lba, const uint8_t* buffer) override;
     IoStatus sectorCount(uint64_t& sectors) override;
-    bool isReady() const { return ready_; }
-    uint8_t lastResponse() const { return lastResponse_; }
-    uint8_t lastDataResponse() const { return lastDataResponse_; }
-    uint32_t maxWriteMs() const { return maxWriteMs_; }
-    uint32_t transferErrorCount() const { return transferErrorCount_; }
+    bool isReady() const { return driver_.ready; }
+    uint8_t lastResponse() const { return driver_.last_response; }
+    uint8_t lastDataResponse() const { return driver_.last_data_response; }
+    uint32_t maxWriteMs() const { return driver_.max_write_ms; }
+    uint32_t transferErrorCount() const { return driver_.transfer_error_count; }
 private:
-    IoStatus transfer(const uint8_t* tx, uint8_t* rx, uint16_t n);
-    void deselect();
-    IoStatus command(uint8_t index, uint32_t arg, uint8_t crc, uint8_t& response);
-    IoStatus singleCommand(uint8_t index, uint32_t arg, uint8_t crc, uint8_t& response);
-    IoStatus waitFor(uint8_t expected, uint32_t timeoutMs, bool dataToken);
-    IoStatus address(uint32_t lba, uint32_t& arg) const;
-    static uint16_t crc16(const uint8_t* data, uint16_t len);
+    static sdcard_c_status_t setClock(void* context, uint32_t hz);
+    static void select(void* context);
+    static void deselect(void* context);
+    static sdcard_c_status_t transfer(void* context, const uint8_t* tx, uint8_t* rx,
+                                      uint16_t length, uint32_t timeoutMs);
+    static uint32_t millis(void* context);
     SpiDrv& bus_;
     ClockDrv& clock_;
-    bool ready_;
-    bool blockAddressed_;
-    uint8_t lastResponse_;
-    uint8_t lastDataResponse_;
-    uint32_t maxWriteMs_;
-    uint32_t transferErrorCount_;
+    sdcard_c_t driver_;
 };
 }
 #endif

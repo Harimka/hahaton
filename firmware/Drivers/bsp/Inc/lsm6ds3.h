@@ -5,6 +5,7 @@
 #ifndef TEAM04_LSM6DS3_H_
 #define TEAM04_LSM6DS3_H_
 #include "imudrv.h"
+#include "lsm6ds3_c.h"
 namespace team04 {
 struct FifoStatus {
     uint16_t unreadWords;
@@ -30,22 +31,18 @@ public:
     IoStatus configureFifo(uint16_t watermarkSamples);
     IoStatus enableFifoInterrupt(bool enabled);
     IoStatus fifoStatus(FifoStatus& status);
-    uint8_t observedId() const { return observedId_; }
+    uint8_t observedId() const { return driver_.observed_id; }
     static bool prepareFifoDma(uint8_t* tx, uint16_t samples, uint16_t capacity);
     static bool decodeFifoSample(const uint8_t* rx, uint16_t samples, uint16_t index,
                                  int16_t& x, int16_t& y, int16_t& z);
 private:
-    static constexpr uint8_t kFifoCtrl1 = 0x06U, kFifoCtrl2 = 0x07U, kFifoCtrl3 = 0x08U;
-    static constexpr uint8_t kFifoCtrl4 = 0x09U, kFifoCtrl5 = 0x0aU, kInt1Ctrl = 0x0dU;
-    static constexpr uint8_t kWhoAmIReg = 0x0fU, kCtrl1 = 0x10U, kCtrl2 = 0x11U;
-    static constexpr uint8_t kCtrl3 = 0x12U, kCtrl4 = 0x13U, kCtrl6 = 0x15U;
-    static constexpr uint8_t kCtrl8 = 0x17U, kCtrl9 = 0x18U, kStatus = 0x1eU, kOutX = 0x28U;
-    IoStatus readRegister(uint8_t reg, uint8_t* data, uint16_t len);
-    IoStatus writeChecked(uint8_t reg, uint8_t value, uint8_t mask);
-    static int16_t decodeWord(const uint8_t* p);
+    static IoStatus fromCStatus(lsm6ds3_c_status_t status);
+    static void busSelect(void* context);
+    static void busDeselect(void* context);
+    static lsm6ds3_c_status_t busTransfer(void* context, const uint8_t* tx, uint8_t* rx,
+                                         uint16_t len, uint32_t timeoutMs);
     SpiDrv& bus_;
-    uint8_t observedId_;
-    bool configured_;
+    lsm6ds3_c_t driver_;
 };
 }
 #endif

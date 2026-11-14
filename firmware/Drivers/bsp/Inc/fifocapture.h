@@ -5,6 +5,7 @@
 #ifndef TEAM04_FIFOCAPTURE_H_
 #define TEAM04_FIFOCAPTURE_H_
 #include "lsm6ds3.h"
+#include "fifocapture_c.h"
 namespace team04 {
 class CriticalSection {
 public:
@@ -51,28 +52,16 @@ public:
     void release();
     CaptureStats snapshot();
 private:
-    enum class State : uint8_t { kIdle, kStatus, kData, kAborting };
-    bool begin(State state, const uint8_t* tx, uint8_t* rx, uint16_t size);
-    void beginStatus();
-    void fault();
-    void noteTime(uint32_t nowUs);
-    void startTime(uint32_t irqUs);
-    void advanceTime();
+    static lsm6ds3_c_status_t startDma(void* context, const uint8_t* tx, uint8_t* rx, uint16_t len);
+    static lsm6ds3_c_status_t abortDma(void* context);
+    static uint32_t micros(void* context);
+    static uint32_t criticalEnter(void* context);
+    static void criticalLeave(void* context, uint32_t key);
     SpiDrv& bus_;
     ClockDrv& clock_;
     CriticalSection& critical_;
-    CaptureBlock queue_[kSlots];
-    CaptureStats stats_;
-    uint8_t statusTx_[5], statusRx_[5];
-    uint8_t dataTx_[kDmaBytes], dataRx_[kDmaBytes];
-    uint8_t head_, tail_, used_;
-    State state_;
-    uint16_t activeSamples_;
-    uint8_t pendingFlags_;
-    uint32_t nextSequence_, irqTimeUs_, nextIrqUs_, dmaStartUs_, sampleTimeUs_;
-    uint16_t timeRemainder_;
-    uint32_t lastTimeUs_;
-    bool pendingIrq_, faulted_, timeSeen_;
+    fifocapture_c_t core_;
+    CaptureBlock peekCache_{};
 };
 }
 #endif
