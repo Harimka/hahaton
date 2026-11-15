@@ -5,7 +5,7 @@
  *          Features:
  *          - 170 MHz SYSCLK (Boost mode) + Hardware FPU
  *          - SPI2 Master @ 5.31 MHz for LSM6DS3 Accelerometer + Gyroscope
- *          - LPUART1 @ 115200 8N1 over ST-LINK V3 Virtual COM Port (PA2 TX / PA3 RX)
+ *          - LPUART1 @ 921600 8N1 over ST-LINK V3 Virtual COM Port (PA2 TX / PA3 RX)
  *          - Non-blocking superloop streaming calibrated 6-axis IMU data to UART
  *          - Heartbeat LED toggling on PA5
  */
@@ -19,6 +19,7 @@
 #include "sdcard.h"
 #include "fatfsadapter.h"
 #include "sample_ring_buffer.h"
+#include "shock_analyzer.h"
 #include "ff.h"
 #include "ff_gen_drv.h"
 
@@ -45,6 +46,7 @@ static void EnableHighResolutionClock(void)
     DWT->CYCCNT = 0U;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 }
+
 }
 
 /* Private function prototypes */
@@ -166,7 +168,7 @@ int main(void)
     uartPort.print("\r\n");
     uartPort.print("====================================================================\r\n");
     uartPort.print(" [Team-04] STM32G474RE Nucleo: Direct high-rate accelerometer capture\r\n");
-    uartPort.print(" SYSCLK: 170 MHz | SPI2: 5.31 MHz | UART: LPUART1 230400 8N1\r\n");
+    uartPort.print(" SYSCLK: 170 MHz | SPI2: 5.31 MHz | UART: LPUART1 921600 8N1\r\n");
     uartPort.print(" Capture: XLDA polling, no FIFO, static 2048-sample RAM ring\r\n");
     uartPort.print("====================================================================\r\n\r\n");
 
@@ -263,9 +265,13 @@ int main(void)
                         static_cast<unsigned long>(sdAdapter.errorCount()));
     }
 
-    uartPort.print("\r\n[CAPTURE] Direct XLDA polling started; no FIFO, UART, or SD writes in sample path.\r\n");
+    uartPort.print("\r\n[CAPTURE] Shock detector active; SD output is mirrored as CSV to UART.\r\n");
+    uartPort.print("[UART FORMAT] SHOCK_BEGIN/SHOCK_SAMPLE/SHOCK_END/SRS\r\n");
 
     static team04::SampleRingBuffer captureBuffer;
+    static team04::ShockAnalyzer shockAnalyzer;
+    static team04::ShockFrame shockFrame;
+    static team04::SrsResult srsResult;
     uint32_t sampleCounter = 0U;
     uint32_t readErrorCounter = 0U;
     uint32_t lastHeartbeatTick = HAL_GetTick();
@@ -286,6 +292,31 @@ int main(void)
                 0U
             };
             captureBuffer.push(sample);
+            shockAnalyzer.process(sample, captureBuffer);
+            if (shockAnalyzer.takeResult(shockFrame, srsResult)) {
+                uartPort.printf("SHOCK_BEGIN;event=%lu;trigger_us=%lu;samples=%u\r\n",
+                                static_cast<unsigned long>(shockFrame.eventId),
+                                static_cast<unsigned long>(shockFrame.triggerTimestampUs),
+                                shockFrame.count);
+                for (uint16_t i = 0U; i < shockFrame.count; ++i) {
+                    const team04::ShockSample& item = shockFrame.samples[i];
+                    uartPort.printf("SHOCK_SAMPLE;%lu;%.6f;%.6f;%.6f\r\n",
+                                    static_cast<unsigned long>(item.timestampUs),
+                                    static_cast<double>(item.accelX),
+                                    static_cast<double>(item.accelY),
+                                    static_cast<double>(item.accelZ));
+                }
+                uartPort.printf("SHOCK_END;event=%lu;samples=%u\r\n",
+                                static_cast<unsigned long>(shockFrame.eventId), shockFrame.count);
+                for (uint16_t i = 0U; i < team04::SrsResult::kPointCount; ++i) {
+                    const team04::SrsPoint& point = srsResult.points[i];
+                    uartPort.printf("SRS;%.3f;%.6f;%.6f;%.6f\r\n",
+                                    static_cast<double>(point.frequencyHz),
+                                    static_cast<double>(point.gx),
+                                    static_cast<double>(point.gy),
+                                    static_cast<double>(point.gz));
+                }
+            }
         } else if (readStatus != team04::IoStatus::kNotReady) {
             ++readErrorCounter;
         }
@@ -364,7 +395,7 @@ static void SystemClock_Config(void)
 /**
  * @brief LPUART1 Initialization Function (ST-LINK V3 Virtual COM Port)
  *        Pins: PA2 = LPUART1_TX, PA3 = LPUART1_RX (AF12)
- *        Baud Rate: 115200, 8 Data Bits, 1 Stop Bit, No Parity
+ *        Baud Rate: 921600, 8 Data Bits, 1 Stop Bit, No Parity
  */
 static void MX_LPUART1_UART_Init(void)
 {
@@ -382,7 +413,7 @@ static void MX_LPUART1_UART_Init(void)
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
     hlpuart1.Instance = LPUART1;
-    hlpuart1.Init.BaudRate = 230400;
+    hlpuart1.Init.BaudRate = 921600;
     hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
     hlpuart1.Init.StopBits = UART_STOPBITS_1;
     hlpuart1.Init.Parity = UART_PARITY_NONE;

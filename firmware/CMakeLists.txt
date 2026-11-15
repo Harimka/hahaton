@@ -64,6 +64,7 @@ set(SOURCES
     Core/Src/stm32g4xx_it.c
     Core/Src/system_stm32g4xx.c
     App/Src/sample_ring_buffer.cpp
+    App/Src/shock_analyzer.cpp
     Drivers/bsp/Src/lsm6ds3.cpp
     Drivers/port/Src/stm32g4spi.cpp
     Drivers/port/Src/stm32g4uart.cpp
