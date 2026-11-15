@@ -84,11 +84,16 @@ git push origin developV2
 ```
 
 ### Шаг 5: Синхронизация с судейским GitLab (`gitlab`)
-Перед тестовыми прогонами на стенде или сдачей этапа код зеркалируется в GitLab:
+Перед тестовыми прогонами на стенде или сдачей этапа код отправляется в GitLab:
 ```powershell
-# Пуш рабочей ветки developV2 в целевую ветку main репозитория GitLab:
-git push gitlab developV2:main
+# 1. Пуш в ветку разработки developv2:
+git push gitlab developV2:developv2
+
+# 2. Доставка в защищенную ветку main (через автоматический Merge Request):
+git push -o merge_request.create -o merge_request.target=main -o merge_request.title="feat: sync developV2 to main" gitlab developV2:sync-to-main
 ```
+> **Внимание:** Прямой `git push gitlab developV2:main` отклоняется сервером GitLab, так как `main` защищена (`Protected Branch`). Подробнее см. [`.agents/skills/gitlab_workflow/SKILL.md`](../gitlab_workflow/SKILL.md).
+
 
 ---
 
