@@ -17,10 +17,12 @@ public:
     IoStatus write(uint32_t lba, const uint8_t* buffer) override;
     IoStatus sectorCount(uint64_t& sectors) override;
     bool isReady() const { return driver_.ready; }
+    bool isBlockAddressed() const { return driver_.block_addressed; }
     uint8_t lastResponse() const { return driver_.last_response; }
     uint8_t lastDataResponse() const { return driver_.last_data_response; }
     uint32_t maxWriteMs() const { return driver_.max_write_ms; }
     uint32_t transferErrorCount() const { return driver_.transfer_error_count; }
+    sdcard_c_init_stage_t initStage() const { return driver_.init_stage; }
 private:
     static sdcard_c_status_t setClock(void* context, uint32_t hz);
     static void select(void* context);

@@ -109,6 +109,7 @@ void sdcard_c_init(sdcard_c_t *driver, const sdcard_c_ops_t *ops)
     driver->last_data_response = 0xffU;
     driver->max_write_ms = 0U;
     driver->transfer_error_count = 0U;
+    driver->init_stage = SDCARD_C_INIT_IDLE;
     if (ops == NULL) {
         driver->ops.context = NULL;
         driver->ops.set_clock = NULL;
@@ -132,11 +133,13 @@ sdcard_c_status_t sdcard_c_initialize(sdcard_c_t *driver)
     driver->ready = false;
     driver->block_addressed = false;
     driver->last_response = 0xffU;
+    driver->init_stage = SDCARD_C_INIT_CLOCKS;
     driver->ops.deselect(driver->ops.context);
     status = driver->ops.set_clock(driver->ops.context, 400000U);
     if (status != SDCARD_C_OK) return status;
     status = transfer(driver, NULL, NULL, 10U);
     if (status != SDCARD_C_OK) return status;
+    driver->init_stage = SDCARD_C_INIT_CMD0;
     start = driver->ops.millis(driver->ops.context);
     for (i = 0U; i < 1024U; ++i) {
         status = single_command(driver, 0U, 0U, 0x95U, &response);
@@ -146,6 +149,7 @@ sdcard_c_status_t sdcard_c_initialize(sdcard_c_t *driver)
     }
     if (status != SDCARD_C_OK || response != 1U) return SDCARD_C_TIMEOUT;
 
+    driver->init_stage = SDCARD_C_INIT_CMD8;
     driver->ops.select(driver->ops.context);
     status = command(driver, 8U, 0x1aaU, 0x87U, &response);
     if (status == SDCARD_C_OK && response == 1U) {
@@ -162,6 +166,7 @@ sdcard_c_status_t sdcard_c_initialize(sdcard_c_t *driver)
     if (status != SDCARD_C_OK) return status;
 
     start = driver->ops.millis(driver->ops.context);
+    driver->init_stage = SDCARD_C_INIT_ACMD41;
     for (i = 0U; i < 4096U; ++i) {
         driver->ops.select(driver->ops.context);
         status = command(driver, 55U, 0U, 0x01U, &response);
@@ -177,6 +182,7 @@ sdcard_c_status_t sdcard_c_initialize(sdcard_c_t *driver)
     }
     if (response != 0U) return SDCARD_C_TIMEOUT;
 
+    driver->init_stage = SDCARD_C_INIT_CMD58;
     driver->ops.select(driver->ops.context);
     status = command(driver, 58U, 0U, 0x01U, &response);
     if (status == SDCARD_C_OK && response == 0U) {
@@ -192,13 +198,16 @@ sdcard_c_status_t sdcard_c_initialize(sdcard_c_t *driver)
     deselect(driver);
     if (status != SDCARD_C_OK) return status;
     if (!driver->block_addressed) {
+        driver->init_stage = SDCARD_C_INIT_CMD16;
         status = single_command(driver, 16U, 512U, 0x01U, &response);
         if (status != SDCARD_C_OK) return status;
         if (response != 0U) return SDCARD_C_ERROR;
     }
+    driver->init_stage = SDCARD_C_INIT_SET_CLOCK;
     status = driver->ops.set_clock(driver->ops.context, 10000000U);
     if (status != SDCARD_C_OK) return status;
     driver->ready = true;
+    driver->init_stage = SDCARD_C_INIT_READY;
     return SDCARD_C_OK;
 }
 

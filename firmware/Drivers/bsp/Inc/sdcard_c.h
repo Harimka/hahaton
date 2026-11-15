@@ -20,6 +20,18 @@ typedef enum {
     SDCARD_C_UNSUPPORTED
 } sdcard_c_status_t;
 
+typedef enum {
+    SDCARD_C_INIT_IDLE = 0,
+    SDCARD_C_INIT_CLOCKS,
+    SDCARD_C_INIT_CMD0,
+    SDCARD_C_INIT_CMD8,
+    SDCARD_C_INIT_ACMD41,
+    SDCARD_C_INIT_CMD58,
+    SDCARD_C_INIT_CMD16,
+    SDCARD_C_INIT_SET_CLOCK,
+    SDCARD_C_INIT_READY
+} sdcard_c_init_stage_t;
+
 typedef struct {
     void *context;
     sdcard_c_status_t (*set_clock)(void *context, uint32_t hz);
@@ -38,6 +50,7 @@ typedef struct {
     uint8_t last_data_response;
     uint32_t max_write_ms;
     uint32_t transfer_error_count;
+    sdcard_c_init_stage_t init_stage;
 } sdcard_c_t;
 
 void sdcard_c_init(sdcard_c_t *driver, const sdcard_c_ops_t *ops);

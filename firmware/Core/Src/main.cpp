@@ -253,6 +253,14 @@ int main(void)
                         driverLinked,
                         static_cast<unsigned>(mountResult),
                         static_cast<unsigned>(sdTestResult));
+        uartPort.printf("[SD DIAG] init_stage=%u ready=%u block_addressed=%u last_response=0x%02X last_data=0x%02X spi_errors=%lu disk_errors=%lu\r\n",
+                        static_cast<unsigned>(sdCard.initStage()),
+                        sdCard.isBlockAddressed() ? 1U : 0U,
+                        sdCard.isReady() ? 1U : 0U,
+                        sdCard.lastResponse(),
+                        sdCard.lastDataResponse(),
+                        static_cast<unsigned long>(sdCard.transferErrorCount()),
+                        static_cast<unsigned long>(sdAdapter.errorCount()));
     }
 
     uartPort.print("\r\n[CAPTURE] Direct XLDA polling started; no FIFO, UART, or SD writes in sample path.\r\n");
