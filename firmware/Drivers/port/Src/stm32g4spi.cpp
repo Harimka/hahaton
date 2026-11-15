@@ -102,8 +102,9 @@ IoStatus Stm32G4Spi::transfer(const uint8_t* tx, uint8_t* rx, uint16_t len, uint
                                               timeoutMs));
     }
 
-    // Pure RX: send dummy 0xFF bytes
+    // Pure RX or clock-only transfer: send dummy 0xFF bytes.
     uint8_t dummy[32];
+    uint8_t discarded[32];
     for (uint8_t& b : dummy) {
         b = 0xFFU;
     }
@@ -116,16 +117,19 @@ IoStatus Stm32G4Spi::transfer(const uint8_t* tx, uint8_t* rx, uint16_t len, uint
         }
 
         const uint16_t chunk = (len > sizeof(dummy)) ? static_cast<uint16_t>(sizeof(dummy)) : len;
+        uint8_t* destination = rx ? rx : discarded;
         const HAL_StatusTypeDef halStatus = HAL_SPI_TransmitReceive(&spi_,
                                                                     dummy,
-                                                                    rx,
+                                                                    destination,
                                                                     chunk,
                                                                     timeoutMs - elapsed);
         if (halStatus != HAL_OK) {
             return convertStatus(halStatus);
         }
 
-        rx += chunk;
+        if (rx) {
+            rx += chunk;
+        }
         len = static_cast<uint16_t>(len - chunk);
     }
 
