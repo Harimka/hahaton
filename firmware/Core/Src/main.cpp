@@ -13,6 +13,8 @@
 #include "main.h"
 #include <stdio.h>
 #include <cstring>
+#include <cstdio>
+#include <math.h>
 #include "lsm6ds3.h"
 #include "stm32g4spi.h"
 #include "stm32g4uart.h"
@@ -64,6 +66,203 @@ static uint16_t uartSamplePosition = 0U;
 static uint16_t uartSrsPosition = 0U;
 static uint8_t uartOutputStage = 0U;
 
+struct CsvBlockWriter {
+    FIL* file;
+    char buffer[512];
+    UINT length;
+};
+
+static bool CsvFlush(CsvBlockWriter& writer)
+{
+    if (writer.length == 0U) {
+        return true;
+    }
+    const UINT expected = writer.length;
+    UINT written = 0U;
+    const FRESULT result = f_write(writer.file, writer.buffer, writer.length, &written);
+    writer.length = 0U;
+    return result == FR_OK && written == expected;
+}
+
+static bool CsvAppend(CsvBlockWriter& writer, const char* text, UINT length)
+{
+    while (length > 0U) {
+        const UINT available = static_cast<UINT>(sizeof(writer.buffer) - writer.length);
+        const UINT chunk = length < available ? length : available;
+        memcpy(&writer.buffer[writer.length], text, chunk);
+        writer.length = static_cast<UINT>(writer.length + chunk);
+        text += chunk;
+        length = static_cast<UINT>(length - chunk);
+        if (writer.length == sizeof(writer.buffer) && !CsvFlush(writer)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool CsvAppendLine(CsvBlockWriter& writer, char* line)
+{
+    for (char* cursor = line; *cursor != '\0'; ++cursor) {
+        if (*cursor == '.') {
+            *cursor = ',';
+        }
+    }
+    return CsvAppend(writer, line, static_cast<UINT>(strlen(line)));
+}
+
+/* Fixed six-decimal conversion without floating-point printf or allocation. */
+static bool CsvFloat(CsvBlockWriter& writer, float value)
+{
+    if (!isfinite(value) || fabsf(value) > 1000000.0f) {
+        return false;
+    }
+    char text[32];
+    unsigned position = 0U;
+    if (value < 0.0f) {
+        text[position++] = '-';
+    }
+    const uint64_t scaled = static_cast<uint64_t>(fabs(static_cast<double>(value))
+                                                 * 1000000.0 + 0.5);
+    uint32_t whole = static_cast<uint32_t>(scaled / 1000000U);
+    char digits[10];
+    unsigned count = 0U;
+    do {
+        digits[count++] = static_cast<char>('0' + whole % 10U);
+        whole /= 10U;
+    } while (whole != 0U);
+    while (count > 0U) {
+        text[position++] = digits[--count];
+    }
+    text[position++] = ',';
+    uint32_t fraction = static_cast<uint32_t>(scaled % 1000000U);
+    for (uint32_t divisor = 100000U; divisor != 0U; divisor /= 10U) {
+        text[position++] = static_cast<char>('0' + fraction / divisor);
+        fraction %= divisor;
+    }
+    return CsvAppend(writer, text, position);
+}
+
+static bool CsvAxes(CsvBlockWriter& writer, float x, float y, float z)
+{
+    return CsvAppend(writer, ";", 1U) && CsvFloat(writer, x)
+        && CsvAppend(writer, ";", 1U) && CsvFloat(writer, y)
+        && CsvAppend(writer, ";", 1U) && CsvFloat(writer, z)
+        && CsvAppend(writer, "\r\n", 2U);
+}
+
+static bool WriteShockCsv(FIL& file, const team04::ShockFrame& frame)
+{
+    CsvBlockWriter writer = {&file, {}, 0U};
+    char line[128];
+    if (!CsvAppend(writer, "t;ax;ay;az\r\n", 12U)) {
+        return false;
+    }
+    for (uint16_t index = 0U; index < frame.count; ++index) {
+        const team04::ShockSample& sample = frame.samples[index];
+        const int length = snprintf(line, sizeof(line), "%lu",
+                                    static_cast<unsigned long>(sample.timestampUs));
+        if (length <= 0 || static_cast<size_t>(length) >= sizeof(line)
+            || !CsvAppendLine(writer, line)
+            || !CsvAxes(writer, sample.accelX, sample.accelY, sample.accelZ)) {
+            return false;
+        }
+    }
+    return CsvFlush(writer);
+}
+
+static bool WriteSrsCsv(FIL& file, const team04::SrsResult& srs)
+{
+    CsvBlockWriter writer = {&file, {}, 0U};
+    if (!CsvAppend(writer, "f;gx;gy;gz\r\n", 12U)) {
+        return false;
+    }
+    for (uint16_t index = 0U; index < team04::SrsResult::kPointCount; ++index) {
+        const team04::SrsPoint& point = srs.points[index];
+        if (!CsvFloat(writer, point.frequencyHz)
+            || !CsvAxes(writer, point.gx, point.gy, point.gz)) {
+            return false;
+        }
+    }
+    return CsvFlush(writer);
+}
+
+static bool WriteShockToSd(team04::ShockFrame& frame,
+                           const team04::SrsResult& srs, FRESULT& error)
+{
+    char path[40];
+    FIL file;
+    const int signalPathLength = snprintf(path, sizeof(path), "0:/raw_signal_%04lu.csv",
+                                          static_cast<unsigned long>(frame.eventId));
+    if (signalPathLength <= 0 || static_cast<size_t>(signalPathLength) >= sizeof(path)) {
+        error = FR_INVALID_NAME;
+        return false;
+    }
+    /* Reserve the next unused pair, including after a reset. Never truncate an
+       earlier measurement, even if only its SRS file survived. */
+    for (uint32_t attempt = 0U; attempt < 10000U; ++attempt) {
+        char srsPath[40];
+        snprintf(path, sizeof(path), "0:/raw_signal_%04lu.csv",
+                 static_cast<unsigned long>(frame.eventId));
+        snprintf(srsPath, sizeof(srsPath), "0:/raw_srs_%04lu.csv",
+                 static_cast<unsigned long>(frame.eventId));
+        FILINFO info;
+        error = f_stat(srsPath, &info);
+        if (error != FR_OK && error != FR_NO_FILE) {
+            return false;
+        }
+        if (error == FR_NO_FILE) {
+            error = f_open(&file, path, FA_CREATE_NEW | FA_WRITE);
+            if (error == FR_OK) {
+                break;
+            }
+            if (error != FR_EXIST) {
+                return false;
+            }
+        }
+        ++frame.eventId;
+        error = FR_EXIST;
+    }
+    if (error != FR_OK) {
+        return false;
+    }
+    bool success = WriteShockCsv(file, frame);
+    const FRESULT closeResult = f_close(&file);
+    if (success && closeResult != FR_OK) {
+        error = closeResult;
+        success = false;
+    }
+    if (!success) {
+        if (error == FR_OK) {
+            error = FR_DISK_ERR;
+        }
+        return false;
+    }
+
+    if (!srs.thresholdConfigured || !srs.thresholdExceeded) {
+        error = FR_OK;
+        return true;
+    }
+    const int srsPathLength = snprintf(path, sizeof(path), "0:/raw_srs_%04lu.csv",
+                                        static_cast<unsigned long>(frame.eventId));
+    if (srsPathLength <= 0 || static_cast<size_t>(srsPathLength) >= sizeof(path)) {
+        error = FR_INVALID_NAME;
+        return false;
+    }
+    error = f_open(&file, path, FA_CREATE_NEW | FA_WRITE);
+    if (error != FR_OK) {
+        return false;
+    }
+    success = WriteSrsCsv(file, srs);
+    const FRESULT srsCloseResult = f_close(&file);
+    if (success && srsCloseResult != FR_OK) {
+        error = srsCloseResult;
+        success = false;
+    }
+    if (!success && error == FR_OK) {
+        error = FR_DISK_ERR;
+    }
+    return success;
+}
 static bool srsAlarmActive = false;
 
 static void StartShockOutput()
@@ -236,7 +435,6 @@ int main(void)
     team04::SdCard sdCard(sdBus, sdClock);
     team04::FatFsAdapter sdAdapter(sdCard);
     FATFS sdFs{};
-    FIL sdFile{};
 
     /* Print initial startup banner to UART */
     uartPort.print("\r\n");
@@ -268,77 +466,31 @@ int main(void)
 
     uartPort.print("[SD] Initializing SPI3 SD card...\r\n");
     const bool sdBound = sdAdapter.bind();
+    char drivePath[] = "0:";
     const uint8_t driverLinked = sdBound
-        ? FATFS_LinkDriver(&team04::FatFsAdapter::kDriver, "0:")
+        ? FATFS_LinkDriver(&team04::FatFsAdapter::kDriver, drivePath)
         : 1U;
     const FRESULT mountResult = (driverLinked == 0U)
         ? f_mount(&sdFs, "0:", 1)
         : FR_NOT_READY;
-    const char* const sdTestPath = "0:/SDTEST.TXT";
-    const char* const sdTestPayload = "team04-sd-smoke-test-v1\r\n";
-    const UINT sdTestLength = static_cast<UINT>(strlen(sdTestPayload));
-    FRESULT sdTestResult = mountResult;
-    bool sdTestPassed = false;
-
-    if (sdBound && driverLinked == 0U && mountResult == FR_OK) {
-        UINT bytesWritten = 0U;
-        UINT bytesRead = 0U;
-        char readback[sizeof("team04-sd-smoke-test-v1\r\n")] = {};
-
-        sdTestResult = f_open(&sdFile, sdTestPath, FA_CREATE_ALWAYS | FA_WRITE);
-        if (sdTestResult == FR_OK) {
-            sdTestResult = f_write(&sdFile, sdTestPayload, sdTestLength, &bytesWritten);
-            if (sdTestResult == FR_OK && bytesWritten != sdTestLength) {
-                sdTestResult = FR_DISK_ERR;
-            }
-            if (sdTestResult == FR_OK) {
-                sdTestResult = f_sync(&sdFile);
-            }
-            const FRESULT closeResult = f_close(&sdFile);
-            if (sdTestResult == FR_OK) {
-                sdTestResult = closeResult;
-            }
-        }
-
-        if (sdTestResult == FR_OK) {
-            sdTestResult = f_open(&sdFile, sdTestPath, FA_READ);
-        }
-        if (sdTestResult == FR_OK) {
-            sdTestResult = f_read(&sdFile, readback, sdTestLength, &bytesRead);
-            if (sdTestResult == FR_OK && bytesRead != sdTestLength) {
-                sdTestResult = FR_INT_ERR;
-            }
-            if (sdTestResult == FR_OK && memcmp(readback, sdTestPayload, sdTestLength) != 0) {
-                sdTestResult = FR_INT_ERR;
-            }
-            const FRESULT closeResult = f_close(&sdFile);
-            if (sdTestResult == FR_OK) {
-                sdTestResult = closeResult;
-            }
-        }
-
-        sdTestPassed = sdTestResult == FR_OK;
-    }
-
-    if (sdTestPassed) {
-        uartPort.printf("[SD TEST] PASS: wrote and verified %u bytes in SDTEST.TXT\r\n",
-                        sdTestLength);
-    } else {
-        uartPort.printf("[SD TEST] FAIL: bind=%u link=%u mount=%u result=%u\r\n",
+    const bool sdReady = sdBound && driverLinked == 0U && mountResult == FR_OK;
+    if (!sdReady) {
+        uartPort.printf("[SD] FAIL: bind=%u link=%u mount=%u\r\n",
                         sdBound ? 1U : 0U,
                         driverLinked,
-                        static_cast<unsigned>(mountResult),
-                        static_cast<unsigned>(sdTestResult));
+                        static_cast<unsigned>(mountResult));
         uartPort.printf("[SD DIAG] init_stage=%u ready=%u block_addressed=%u last_response=0x%02X last_data=0x%02X spi_errors=%lu disk_errors=%lu\r\n",
                         static_cast<unsigned>(sdCard.initStage()),
-                        sdCard.isBlockAddressed() ? 1U : 0U,
                         sdCard.isReady() ? 1U : 0U,
+                        sdCard.isBlockAddressed() ? 1U : 0U,
                         sdCard.lastResponse(),
                         sdCard.lastDataResponse(),
                         static_cast<unsigned long>(sdCard.transferErrorCount()),
                         static_cast<unsigned long>(sdAdapter.errorCount()));
     }
 
+    uartPort.printf("[SD] Logger %s: raw_signal_XXXX.csv; raw_srs_XXXX.csv on threshold exceed\r\n",
+                    sdReady ? "ready" : "disabled");
     uartPort.print("\r\n[CAPTURE] Shock detector active; SD output is mirrored as CSV to UART.\r\n");
     uartPort.print("[UART FORMAT] SHOCK_BEGIN/SHOCK_SAMPLE/SHOCK_END/SRS\r\n");
 
@@ -346,6 +498,7 @@ int main(void)
     static team04::ShockAnalyzer shockAnalyzer;
     static team04::ShockFrame shockFrame;
     static team04::SrsResult srsResult;
+    FRESULT sdLogResult = FR_OK;
     bool analysisPending = false;
     uint32_t sampleCounter = 0U;
     uint32_t readErrorCounter = 0U;
@@ -375,6 +528,15 @@ int main(void)
         shockAnalyzer.service();
         if (analysisPending && shockAnalyzer.srsReady()) {
             analysisPending = false;
+            if (sdReady) {
+                const bool logged = WriteShockToSd(shockFrame, srsResult, sdLogResult);
+                uartPort.printf("[SD] event=%lu signal=%s srs=%s result=%u\r\n",
+                                static_cast<unsigned long>(shockFrame.eventId),
+                                logged ? "saved" : "failed",
+                                (srsResult.thresholdConfigured && srsResult.thresholdExceeded)
+                                    ? (logged ? "saved" : "failed") : "not_required",
+                                static_cast<unsigned>(sdLogResult));
+            }
             StartShockOutput();
             if (srsResult.thresholdConfigured && srsResult.thresholdExceeded) {
                 srsAlarmActive = true;
@@ -455,7 +617,7 @@ static void SystemClock_Config(void)
         Error_Handler();
     }
 
-    /* Select PCLK1 as LPUART1 clock source */
+    /* Select PCLK1 as LPUART1 clock source. */
     PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_LPUART1;
     PeriphClkInit.Lpuart1ClockSelection = RCC_LPUART1CLKSOURCE_PCLK1;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)

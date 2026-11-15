@@ -1,93 +1,100 @@
-# team-04
+# Team-04: ударные нагрузки
 
+Проект для работы с платой NUCLEO-G474RE и датчиком LSM6DS3. Репозиторий содержит исходники прошивки, драйверы, скрипт приёма телеметрии и документацию по аппаратуре и форматам данных.
 
+## Что находится в проекте
 
-## Getting started
+- `build.bat` — сборка прошивки в Windows.
+- `flash.bat` — запись собранной прошивки на плату через ST-LINK.
+- `firmware/CMakeLists.txt` — состав и параметры сборки CMake.
+- `firmware/arm-none-eabi-toolchain.cmake` — настройка ARM-компилятора.
+- `firmware/Core/` — основной код и конфигурация микроконтроллера.
+- `firmware/Drivers/bsp/` — драйверы датчика и SD-карты.
+- `firmware/Drivers/port/` — адаптеры периферии STM32 HAL.
+- `firmware/Middlewares/Third_Party/FatFs/` — файловая система FatFs.
+- `scripts/record_shock.py` — приём UART-телеметрии и сохранение в CSV.
+- `docs/` — архитектура, аппаратные параметры, интерфейсы и заметки по интеграции.
+- `docs/hardware/COMPONENTS_INFO.md` — распиновка и настройки оборудования.
+- `firmware/team-04_firmware.ioc` — проект STM32CubeMX.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## Требования для сборки
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+На компьютере с Windows нужны:
 
-## Add your files
+- CMake 3.20 или новее;
+- Ninja;
+- Arm GNU Toolchain для `arm-none-eabi`;
+- STM32CubeProgrammer и драйвер ST-LINK для прошивки.
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+HAL, CMSIS и FatFs уже включены в проект. CubeIDE не требуется для командной сборки.
 
+## Сборка
+
+Откройте `cmd.exe` в каталоге проекта и выполните:
+
+```bat
+build.bat
 ```
-cd existing_repo
-git remote add origin https://gl.hakaton.1440.space/hackathon-2026/stage-1/team-04.git
-git branch -M main
-git push -uf origin main
+
+Скрипт запускает CMake, который конфигурирует проект, а затем собирает прошивку Ninja. Перед первым запуском проверьте, что CMake и ARM toolchain доступны через `PATH`.
+
+В текущем `build.bat` путь к Ninja задан для конкретного компьютера. Если он отличается, замените значение `CMAKE_MAKE_PROGRAM` в `build.bat` на путь к установленному `ninja.exe` либо используйте Ninja из `PATH`, убрав это переопределение.
+
+После успешной сборки файлы появятся в `firmware/build/`:
+
+- `team04_firmware.elf` — файл для отладки;
+- `team04_firmware.hex` — файл для прошивки;
+- `team04_firmware.bin` — бинарный образ;
+- `team04_firmware.map` — карта размещения программы.
+
+## Прошивка платы
+
+Подключите NUCLEO-G474RE к компьютеру через USB-разъём ST-LINK и выполните из корня проекта:
+
+```bat
+flash.bat
 ```
 
-## Integrate with your tools
+Скрипт использует STM32CubeProgrammer, а если он недоступен по заданному в скрипте пути — пытается найти `st-flash` в `PATH`. Путь к STM32CubeProgrammer в `flash.bat` также задан для конкретной установки и при необходимости должен быть заменён.
 
-* [Set up project integrations](https://gl.hakaton.1440.space/hackathon-2026/stage-1/team-04/-/settings/integrations)
+Чтобы гарантированно прошить последнюю версию после изменений, сначала соберите проект командой `build.bat`, затем запустите `flash.bat`. Если HEX уже существует, `flash.bat` сам не проверяет, что он соответствует текущим исходникам.
 
-## Collaborate with your team
+## Как устроена сборка
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+Сборка организована через CMake и запускается BAT-файлами. BAT-файлы дают организатору короткие команды для сборки и прошивки, а параметры и состав прошивки описаны в `firmware/CMakeLists.txt`.
 
-## Test and Deploy
+Такой подход позволяет собирать проект из отдельных модулей: основного приложения, драйверов, HAL, CMSIS и FatFs. Состав модулей и параметры компиляции можно изменять централизованно в CMake, а саму сборку запускать из командной строки или автоматизировать. STM32CubeIDE можно использовать для просмотра и отладки кода; CubeMX — для настройки проекта. Для фактической сборки используется конфигурация CMake, чтобы результат не зависел от локальных настроек IDE.
 
-Use the built-in continuous integration in GitLab.
+## Документация
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+- `docs/PROJECT_SUMMARY.md` — цели проекта и история решений.
+- `docs/ARCHITECTURE.md` — устройство программных слоёв.
+- `docs/hardware/COMPONENTS_INFO.md` — плата, пины и параметры датчика/SD.
+- `docs/interfaces.md` — описания внутренних и файловых форматов данных.
+- `docs/DRIVER_HANDOFF.md` — заметки по драйверам и интеграции.
+- `TumaSRS_dm09.pdf` — справочный материал по SRS.
+- `Кейс__Ударные_нагрузки_ — копия.txt` — копия текста задания.
 
-***
+## Текущий режим работы
 
-# Editing this README
+Текущая прошивка выдаёт данные акселерометра и гироскопа в CSV по UART и записывает их на SD-карту в `imu.csv`. Параметры UART: 230400 baud, 8N1. Скрипт ПК запускается из корня проекта, например:
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+```bat
+python scripts\record_shock.py --port COM3 --baud 230400 --output run01.csv
+```
 
-## Suggestions for a good README
+Для скрипта требуется пакет `pyserial`. Он может сохранять телеметрию ПК в CSV и, при установленном `matplotlib`, построить график.
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+Описанные в `docs/interfaces.md` форматы `raw_signal_XXXX.bin` и `raw_srs_XXXX.bin`, а также расчёт SRS, не реализованы в текущем приложении. Настройка датчика на 6,66 кГц не означает, что поток CSV передаётся с этой частотой.
 
-## Name
-Choose a self-explaining name for your project.
+## Запуск визуализатора на Windows
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+1. Откройте папку визуализатора `srs-dashboard` в проекте, полученном из Git.
+2. Установите [Python 3.10+](https://www.python.org/downloads/windows/), включив **Add python.exe to PATH** и **Python Launcher**. Дополнительные пакеты не нужны.
+3. Поместите `serial_com9.log` рядом с `index.html`, `realtime_bridge.py` и `start_realtime_bridge_windows.bat`. Программа записи должна обновлять лог в этой папке.
+4. Запустите `start_realtime_bridge_windows.bat` и оставьте окно открытым.
+5. Откройте `index.html` в Chrome или Edge. Данные обновляются автоматически, обнаруженные версии логов сохраняются в `archive`.
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+Проверка: http://127.0.0.1:8765/health должен вернуть `{"ok":true}`. Остановка — `Ctrl+C` в окне скрипта.
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+**Без Python:** откройте `index.html` и нажмите «Загрузить .log / .csv». Файл загружается однократно, без автоматического обновления.

@@ -69,6 +69,7 @@ set(SOURCES
     Drivers/port/Src/stm32g4spi.cpp
     Drivers/port/Src/stm32g4uart.cpp
     Drivers/port/Src/fatfsadapter.cpp
+    Drivers/port/Src/fatfs_ascii.c
     Drivers/bsp/Src/sdcard.cpp
     Drivers/bsp/Src/sdcard_c.c
     Middlewares/Third_Party/FatFs/src/ff.c

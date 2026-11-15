@@ -49,6 +49,12 @@ IoStatus Stm32G4Spi::setClock(uint32_t maxHz)
         return IoStatus::kBusy;
     }
 
+    if (spi_.Instance != SPI1 && spi_.Instance != SPI2 && spi_.Instance != SPI3) {
+        return IoStatus::kUnsupported;
+    }
+
+    const uint32_t pclk = (spi_.Instance == SPI1) ? HAL_RCC_GetPCLK2Freq() : HAL_RCC_GetPCLK1Freq();
+
     const uint32_t prescalers[] = {
         SPI_BAUDRATEPRESCALER_2,
         SPI_BAUDRATEPRESCALER_4,
@@ -60,7 +66,7 @@ IoStatus Stm32G4Spi::setClock(uint32_t maxHz)
         SPI_BAUDRATEPRESCALER_256
     };
 
-    const uint32_t pclk = HAL_RCC_GetPCLK1Freq();
+    /* SPI uses its APB clock directly; only timer clocks are doubled. */
     uint32_t div = 2U;
     uint8_t idx = 0U;
 
@@ -69,9 +75,11 @@ IoStatus Stm32G4Spi::setClock(uint32_t maxHz)
         div *= 2U;
     }
 
-    if (idx >= 8U) {
+    if (idx >= 8U && static_cast<uint64_t>(maxHz) * 256U < pclk) {
         return IoStatus::kUnsupported;
     }
+
+    if (idx >= 8U) idx = 7U;
 
     __HAL_SPI_DISABLE(&spi_);
     MODIFY_REG(spi_.Instance->CR1, SPI_CR1_BR, prescalers[idx]);
@@ -87,6 +95,12 @@ IoStatus Stm32G4Spi::transfer(const uint8_t* tx, uint8_t* rx, uint16_t len, uint
         return IoStatus::kInvalid;
     }
 
+    // Drain any leftover unread bytes in RX FIFO and clear overrun flag
+    while (__HAL_SPI_GET_FLAG(&spi_, SPI_FLAG_RXNE)) {
+        (void)spi_.Instance->DR;
+    }
+    __HAL_SPI_CLEAR_OVRFLAG(&spi_);
+
     if (tx && rx) {
         return convertStatus(HAL_SPI_TransmitReceive(&spi_,
                                                      const_cast<uint8_t*>(tx),
@@ -96,13 +110,33 @@ IoStatus Stm32G4Spi::transfer(const uint8_t* tx, uint8_t* rx, uint16_t len, uint
     }
 
     if (tx && !rx) {
-        return convertStatus(HAL_SPI_Transmit(&spi_,
-                                              const_cast<uint8_t*>(tx),
-                                              len,
-                                              timeoutMs));
+        // Full duplex: transmit while discarding incoming bytes into a scratch buffer
+        // to prevent hardware RX FIFO overflow and maintain synchronization
+        uint8_t discarded[32];
+        const uint32_t startTick = HAL_GetTick();
+        while (len > 0U) {
+            const uint32_t elapsed = HAL_GetTick() - startTick;
+            if (elapsed >= timeoutMs) {
+                return IoStatus::kTimeout;
+            }
+
+            const uint16_t chunk = (len > sizeof(discarded)) ? static_cast<uint16_t>(sizeof(discarded)) : len;
+            const HAL_StatusTypeDef halStatus = HAL_SPI_TransmitReceive(&spi_,
+                                                                        const_cast<uint8_t*>(tx),
+                                                                        discarded,
+                                                                        chunk,
+                                                                        timeoutMs - elapsed);
+            if (halStatus != HAL_OK) {
+                return convertStatus(halStatus);
+            }
+
+            tx += chunk;
+            len = static_cast<uint16_t>(len - chunk);
+        }
+        return IoStatus::kOk;
     }
 
-    // Pure RX or clock-only transfer: send dummy 0xFF bytes.
+    // Pure RX or clock-only transfer: send dummy 0xFF bytes while capturing or discarding RX
     uint8_t dummy[32];
     uint8_t discarded[32];
     for (uint8_t& b : dummy) {
