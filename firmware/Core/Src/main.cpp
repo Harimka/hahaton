@@ -56,6 +56,80 @@ static void MX_LPUART1_UART_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_SPI3_Init(void);
 
+namespace {
+static char uartLine[256] = {};
+static uint16_t uartLineLength = 0U;
+static uint16_t uartLinePosition = 0U;
+static uint16_t uartSamplePosition = 0U;
+static uint16_t uartSrsPosition = 0U;
+static uint8_t uartOutputStage = 0U;
+
+static bool srsAlarmActive = false;
+
+static void StartShockOutput()
+{
+    uartOutputStage = 1U;
+    uartLineLength = 0U;
+    uartLinePosition = 0U;
+    uartSamplePosition = 0U;
+    uartSrsPosition = 0U;
+}
+
+static bool ServiceShockOutput(team04::Stm32G4Uart& uart,
+                               const team04::ShockFrame& frame,
+                               const team04::SrsResult& srs)
+{
+    if (uartOutputStage == 0U) {
+        return true;
+    }
+    if (uartLinePosition < uartLineLength) {
+        if (uart.writeByte(static_cast<uint8_t>(uartLine[uartLinePosition]))) {
+            ++uartLinePosition;
+        }
+        return false;
+    }
+
+    uartLinePosition = 0U;
+    if (uartOutputStage == 1U) {
+        uartLineLength = static_cast<uint16_t>(snprintf(
+            uartLine, sizeof(uartLine),
+            "SHOCK_BEGIN;event=%lu;trigger_us=%lu;samples=%u\r\n",
+            static_cast<unsigned long>(frame.eventId),
+            static_cast<unsigned long>(frame.triggerTimestampUs), frame.count));
+        uartOutputStage = 2U;
+    } else if (uartOutputStage == 2U && uartSamplePosition < frame.count) {
+        const team04::ShockSample& item = frame.samples[uartSamplePosition++];
+        uartLineLength = static_cast<uint16_t>(snprintf(
+            uartLine, sizeof(uartLine), "SHOCK_SAMPLE;%lu;%.6f;%.6f;%.6f\r\n",
+            static_cast<unsigned long>(item.timestampUs),
+            static_cast<double>(item.accelX), static_cast<double>(item.accelY),
+            static_cast<double>(item.accelZ)));
+    } else if (uartOutputStage == 2U) {
+        uartLineLength = static_cast<uint16_t>(snprintf(
+            uartLine, sizeof(uartLine), "SHOCK_END;event=%lu;samples=%u\r\n",
+            static_cast<unsigned long>(frame.eventId), frame.count));
+        uartOutputStage = 3U;
+    } else if (uartOutputStage == 3U && uartSrsPosition < team04::SrsResult::kPointCount) {
+        const team04::SrsPoint& point = srs.points[uartSrsPosition++];
+        uartLineLength = static_cast<uint16_t>(snprintf(
+            uartLine, sizeof(uartLine), "SRS;%.3f;%.6f;%.6f;%.6f\r\n",
+            static_cast<double>(point.frequencyHz), static_cast<double>(point.gx),
+            static_cast<double>(point.gy), static_cast<double>(point.gz)));
+    } else if (uartOutputStage == 3U) {
+        uartLineLength = static_cast<uint16_t>(snprintf(
+            uartLine, sizeof(uartLine), "SRS_STATUS;configured=%u;exceeded=%u\r\n",
+            srs.thresholdConfigured ? 1U : 0U,
+            srs.thresholdExceeded ? 1U : 0U));
+        uartOutputStage = 4U;
+    } else {
+        uartOutputStage = 0U;
+        uartLineLength = 0U;
+        return true;
+    }
+    return false;
+}
+}
+
 /**
  * @brief Standard library syscalls stubs and _write redirection to LPUART1.
  */
@@ -272,12 +346,13 @@ int main(void)
     static team04::ShockAnalyzer shockAnalyzer;
     static team04::ShockFrame shockFrame;
     static team04::SrsResult srsResult;
+    bool analysisPending = false;
     uint32_t sampleCounter = 0U;
     uint32_t readErrorCounter = 0U;
     uint32_t lastHeartbeatTick = HAL_GetTick();
 
     /* High-rate path: poll XLDA, read six accelerometer bytes, store in static RAM. */
-    while (1)
+    for (;;)
     {
         team04::AccelRawData accel{};
         const team04::IoStatus readStatus = imu.readAccelIfReady(accel);
@@ -293,38 +368,35 @@ int main(void)
             };
             captureBuffer.push(sample);
             shockAnalyzer.process(sample, captureBuffer);
-            if (shockAnalyzer.takeResult(shockFrame, srsResult)) {
-                uartPort.printf("SHOCK_BEGIN;event=%lu;trigger_us=%lu;samples=%u\r\n",
-                                static_cast<unsigned long>(shockFrame.eventId),
-                                static_cast<unsigned long>(shockFrame.triggerTimestampUs),
-                                shockFrame.count);
-                for (uint16_t i = 0U; i < shockFrame.count; ++i) {
-                    const team04::ShockSample& item = shockFrame.samples[i];
-                    uartPort.printf("SHOCK_SAMPLE;%lu;%.6f;%.6f;%.6f\r\n",
-                                    static_cast<unsigned long>(item.timestampUs),
-                                    static_cast<double>(item.accelX),
-                                    static_cast<double>(item.accelY),
-                                    static_cast<double>(item.accelZ));
-                }
-                uartPort.printf("SHOCK_END;event=%lu;samples=%u\r\n",
-                                static_cast<unsigned long>(shockFrame.eventId), shockFrame.count);
-                for (uint16_t i = 0U; i < team04::SrsResult::kPointCount; ++i) {
-                    const team04::SrsPoint& point = srsResult.points[i];
-                    uartPort.printf("SRS;%.3f;%.6f;%.6f;%.6f\r\n",
-                                    static_cast<double>(point.frequencyHz),
-                                    static_cast<double>(point.gx),
-                                    static_cast<double>(point.gy),
-                                    static_cast<double>(point.gz));
-                }
-            }
         } else if (readStatus != team04::IoStatus::kNotReady) {
             ++readErrorCounter;
         }
 
+        shockAnalyzer.service();
+        if (analysisPending && shockAnalyzer.srsReady()) {
+            analysisPending = false;
+            StartShockOutput();
+            if (srsResult.thresholdConfigured && srsResult.thresholdExceeded) {
+                srsAlarmActive = true;
+            }
+        }
+
+        if (!analysisPending && uartOutputStage == 0U
+            && shockAnalyzer.takeResult(shockFrame, srsResult)) {
+            analysisPending = true;
+        }
+
+        (void)ServiceShockOutput(uartPort, shockFrame, srsResult);
+
         /* Diagnostic heartbeat only; it does not transmit and does not block sampling. */
         const uint32_t now = HAL_GetTick();
         if ((now - lastHeartbeatTick) >= 500U) {
-            HAL_GPIO_TogglePin(LED_GPIO_PORT, LED_PIN);
+            if (!srsAlarmActive) {
+                HAL_GPIO_WritePin(LED_GPIO_PORT, LED_PIN, GPIO_PIN_RESET);
+            }
+            if (srsAlarmActive) {
+                HAL_GPIO_TogglePin(LED_GPIO_PORT, LED_PIN);
+            }
             lastHeartbeatTick = now;
         }
     }

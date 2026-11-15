@@ -27,6 +27,17 @@ uint16_t Stm32G4Uart::write(const uint8_t* data, uint16_t length)
     return 0U;
 }
 
+bool Stm32G4Uart::writeByte(uint8_t byte)
+{
+    /* Do not use HAL_UART_Transmit(timeout=0): a byte may already have been
+       accepted when HAL reports a timeout waiting for TC, causing duplicates. */
+    if (__HAL_UART_GET_FLAG(&huart_, UART_FLAG_TXE) == RESET) {
+        return false;
+    }
+    huart_.Instance->TDR = byte;
+    return true;
+}
+
 void Stm32G4Uart::print(const char* str)
 {
     if (!str) {

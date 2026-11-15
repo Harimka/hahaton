@@ -9,12 +9,54 @@
 
 namespace team04 {
 
+namespace {
+/* Fill these 92 values with the approved limit curve in g. Zero means that
+   the corresponding point is not configured yet. */
+static constexpr float kSrsThresholdG[SrsResult::kPointCount] = {
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 0.0f
+};
+}
+
 ShockAnalyzer::ShockAnalyzer()
     : frame_{}, srs_{}, baselineX_(0.0f), baselineY_(0.0f), baselineZ_(0.0f)
     , baselineSumX_(0.0f), baselineSumY_(0.0f), baselineSumZ_(0.0f)
     , baselineCount_(0U), quietCount_(0U), capturing_(false)
     , resultReady_(false), eventId_(0U)
+    , coefficients_{}
+    , calculating_(false)
+    , srsPoint_(0U)
+    , srsSample_(0U)
+    , srsLength_(0U)
+    , input1_{}, input2_{}, output1_{}, output2_{}, maxima_{}
+    , analysisFrame_(nullptr)
+    , analysisResult_(nullptr)
 {
+    /* Precompute once at startup, never while sampling an event. Formulas:
+       Smallwood, ramp invariant absolute-acceleration SRS, Q=10. */
+    for (uint16_t i = 0U; i < SrsResult::kPointCount; ++i) {
+        const double frequency = 10.0 * pow(2.0, static_cast<double>(i) / 12.0);
+        const double omegaT = 6.283185307179586 * frequency / 6660.0;
+        const double a = omegaT / 20.0;
+        const double b = omegaT * sqrt(1.0 - 0.0025);
+        const double decay = exp(-a);
+        const double s = decay * sin(b) / b;
+        const double c = decay * cos(b);
+        coefficients_[i] = {static_cast<float>(frequency),
+            static_cast<float>(1.0 - s), static_cast<float>(2.0 * (s - c)),
+            static_cast<float>(decay * decay - s),
+            static_cast<float>(-2.0 * c), static_cast<float>(decay * decay)};
+    }
 }
 
 void ShockAnalyzer::reset()
@@ -29,6 +71,7 @@ void ShockAnalyzer::reset()
     quietCount_ = 0U;
     capturing_ = false;
     resultReady_ = false;
+    calculating_ = false;
     frame_.count = 0U;
 }
 
@@ -65,10 +108,10 @@ void ShockAnalyzer::process(const CaptureSample& sample, const SampleRingBuffer&
     const float z = static_cast<float>(sample.accelZ) * kAccelScaleG;
 
     if (!capturing_) {
-        baselineSumX_ += x;
-        baselineSumY_ += y;
-        baselineSumZ_ += z;
         if (baselineCount_ < kBaselineLength) {
+            baselineSumX_ += x;
+            baselineSumY_ += y;
+            baselineSumZ_ += z;
             ++baselineCount_;
             baselineX_ = baselineSumX_ / static_cast<float>(baselineCount_);
             baselineY_ = baselineSumY_ / static_cast<float>(baselineCount_);
@@ -76,7 +119,8 @@ void ShockAnalyzer::process(const CaptureSample& sample, const SampleRingBuffer&
         }
 
         ShockSample current{sample.timestampUs, x - baselineX_, y - baselineY_, z - baselineZ_};
-        if (magnitude(current) < kTriggerG || baselineCount_ < kBaselineLength) {
+        if (magnitude(current) < kTriggerG || baselineCount_ < kBaselineLength
+            || history.size() <= kHistoryLength) {
             return;
         }
 
@@ -107,7 +151,7 @@ void ShockAnalyzer::process(const CaptureSample& sample, const SampleRingBuffer&
     } else {
         quietCount_ = 0U;
     }
-    if (quietCount_ >= kQuietSamples) {
+    if (quietCount_ >= kQuietSamples || frame_.count == ShockFrame::kCapacity) {
         finishFrame();
     }
 }
@@ -118,7 +162,6 @@ void ShockAnalyzer::finishFrame()
         return;
     }
     trimFrameToThreshold();
-    calculateSrs();
     capturing_ = false;
     resultReady_ = true;
 }
@@ -167,48 +210,89 @@ void ShockAnalyzer::trimFrameToThreshold()
     frame_.count = trimmedCount;
 }
 
-void ShockAnalyzer::calculateSrs()
+void ShockAnalyzer::startSrsPoint()
 {
-    for (uint16_t point = 0U; point < SrsResult::kPointCount; ++point) {
-        const float frequency = 10.0f * powf(2.0f, static_cast<float>(point) / 12.0f);
-        const float omegaT = 6.28318530718f * frequency / 6660.0f;
-        const float q = 10.0f;
-        const float a = omegaT / (2.0f * q);
-        const float b = omegaT * sqrtf(1.0f - 1.0f / (4.0f * q * q));
-        const float decay = expf(-a);
-        const float sinc = fabsf(b) < 0.000001f ? 1.0f : sinf(b) / b;
-        const float b0 = 1.0f - decay * sinc;
-        const float b1 = 2.0f * decay * (sinc - cosf(b));
-        const float b2 = decay * decay - decay * sinc;
-        const float a1 = -2.0f * decay * cosf(b);
-        const float a2 = decay * decay;
-        float maxX = 0.0f, maxY = 0.0f, maxZ = 0.0f;
-        float x1 = 0.0f, x2 = 0.0f, yx1 = 0.0f, yx2 = 0.0f;
-        float y1 = 0.0f, y2 = 0.0f, yy1 = 0.0f, yy2 = 0.0f;
-        float z1 = 0.0f, z2 = 0.0f, yz1 = 0.0f, yz2 = 0.0f;
-        for (uint16_t i = 0U; i < frame_.count; ++i) {
-            const ShockSample& input = frame_.samples[i];
-            const float outX = b0 * input.accelX + b1 * x1 + b2 * x2 - a1 * yx1 - a2 * yx2;
-            const float outY = b0 * input.accelY + b1 * y1 + b2 * y2 - a1 * yy1 - a2 * yy2;
-            const float outZ = b0 * input.accelZ + b1 * z1 + b2 * z2 - a1 * yz1 - a2 * yz2;
-            x2 = x1; x1 = input.accelX; yx2 = yx1; yx1 = outX;
-            y2 = y1; y1 = input.accelY; yy2 = yy1; yy1 = outY;
-            z2 = z1; z1 = input.accelZ; yz2 = yz1; yz1 = outZ;
-            maxX = fmaxf(maxX, fabsf(outX));
-            maxY = fmaxf(maxY, fabsf(outY));
-            maxZ = fmaxf(maxZ, fabsf(outZ));
+    srsSample_ = 0U;
+    /* Include one full lowest-frequency period after input removal. For an
+       underdamped free response the first-cycle extrema bound later cycles. */
+    srsLength_ = analysisFrame_->count + 1U
+        + static_cast<uint32_t>(ceilf(6660.0f
+            / (coefficients_[srsPoint_].frequency * 0.998749218f)));
+    for (uint16_t axis = 0U; axis < 3U; ++axis) {
+        input1_[axis] = input2_[axis] = 0.0f;
+        output1_[axis] = output2_[axis] = maxima_[axis] = 0.0f;
+    }
+}
+
+void ShockAnalyzer::service()
+{
+    if (!calculating_) {
+        return;
+    }
+    const Coefficients& c = coefficients_[srsPoint_];
+    /* Fixed work budget so acquisition can run between slices. */
+    for (uint16_t step = 0U; step < 8U && srsSample_ < srsLength_; ++step) {
+        float input[3] = {};
+        if (srsSample_ < analysisFrame_->count) {
+            const ShockSample& sample = analysisFrame_->samples[srsSample_];
+            input[0] = sample.accelX;
+            input[1] = sample.accelY;
+            input[2] = sample.accelZ;
         }
-        srs_.points[point] = {frequency, maxX, maxY, maxZ};
+        for (uint16_t axis = 0U; axis < 3U; ++axis) {
+            const float out = c.b0 * input[axis] + c.b1 * input1_[axis]
+                + c.b2 * input2_[axis] - c.a1 * output1_[axis]
+                - c.a2 * output2_[axis];
+            input2_[axis] = input1_[axis];
+            input1_[axis] = input[axis];
+            output2_[axis] = output1_[axis];
+            output1_[axis] = out;
+            maxima_[axis] = fmaxf(maxima_[axis], fabsf(out));
+        }
+        ++srsSample_;
+    }
+    if (srsSample_ == srsLength_) {
+        srs_.points[srsPoint_] = {c.frequency, maxima_[0], maxima_[1], maxima_[2]};
+        ++srsPoint_;
+        if (srsPoint_ == SrsResult::kPointCount) {
+            calculating_ = false;
+            evaluateThreshold();
+            *analysisResult_ = srs_;
+        } else {
+            startSrsPoint();
+        }
+    }
+}
+
+void ShockAnalyzer::evaluateThreshold()
+{
+    srs_.thresholdConfigured = true;
+    srs_.thresholdExceeded = false;
+    for (uint16_t point = 0U; point < SrsResult::kPointCount; ++point) {
+        if (kSrsThresholdG[point] <= 0.0f) {
+            srs_.thresholdConfigured = false;
+            continue;
+        }
+        const SrsPoint& value = srs_.points[point];
+        if (value.gx > kSrsThresholdG[point]
+            || value.gy > kSrsThresholdG[point]
+            || value.gz > kSrsThresholdG[point]) {
+            srs_.thresholdExceeded = true;
+        }
     }
 }
 
 bool ShockAnalyzer::takeResult(ShockFrame& frame, SrsResult& srs)
 {
-    if (!resultReady_) {
+    if (!resultReady_ || calculating_) {
         return false;
     }
     frame = frame_;
-    srs = srs_;
+    analysisFrame_ = &frame;
+    analysisResult_ = &srs;
+    calculating_ = true;
+    srsPoint_ = 0U;
+    startSrsPoint();
     resultReady_ = false;
     frame_.count = 0U;
     return true;

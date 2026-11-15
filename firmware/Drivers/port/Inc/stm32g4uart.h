@@ -25,6 +25,7 @@ public:
     Stm32G4Uart& operator=(const Stm32G4Uart&) = delete;
 
     uint16_t write(const uint8_t* data, uint16_t length) override;
+    bool writeByte(uint8_t byte);
     void print(const char* str) override;
 
     /**
