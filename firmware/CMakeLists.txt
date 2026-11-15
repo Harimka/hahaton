@@ -26,6 +26,7 @@ add_definitions(
 # Include Directories
 include_directories(
     Core/Inc
+    App/Inc
     Drivers/bsp/Inc
     Drivers/port/Inc
     Middlewares/Third_Party/FatFs/src
@@ -62,6 +63,7 @@ set(SOURCES
     Core/Src/main.cpp
     Core/Src/stm32g4xx_it.c
     Core/Src/system_stm32g4xx.c
+    App/Src/sample_ring_buffer.cpp
     Drivers/bsp/Src/lsm6ds3.cpp
     Drivers/port/Src/stm32g4spi.cpp
     Drivers/port/Src/stm32g4uart.cpp

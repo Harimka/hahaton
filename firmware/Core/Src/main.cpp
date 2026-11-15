@@ -12,12 +12,13 @@
 
 #include "main.h"
 #include <stdio.h>
-#include <string.h>
+#include <cstring>
 #include "lsm6ds3.h"
 #include "stm32g4spi.h"
 #include "stm32g4uart.h"
 #include "sdcard.h"
 #include "fatfsadapter.h"
+#include "sample_ring_buffer.h"
 #include "ff.h"
 #include "ff_gen_drv.h"
 
@@ -31,8 +32,19 @@ class MainClock final : public team04::ClockDrv {
 public:
     ~MainClock() override = default;
     uint32_t millis() const override { return HAL_GetTick(); }
-    uint32_t micros() const override { return HAL_GetTick() * 1000U; }
+    uint32_t micros() const override
+    {
+        const uint32_t cyclesPerMicrosecond = SystemCoreClock / 1000000U;
+        return cyclesPerMicrosecond == 0U ? 0U : DWT->CYCCNT / cyclesPerMicrosecond;
+    }
 };
+
+static void EnableHighResolutionClock(void)
+{
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0U;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
 }
 
 /* Private function prototypes */
@@ -41,7 +53,6 @@ static void MX_GPIO_Init(void);
 static void MX_LPUART1_UART_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_SPI3_Init(void);
-static bool SD_Append(FIL* file, const char* text);
 
 /**
  * @brief Standard library syscalls stubs and _write redirection to LPUART1.
@@ -123,6 +134,7 @@ int main(void)
 
     /* Configure the system clock to maximum 170 MHz in Range 1 Boost mode */
     SystemClock_Config();
+    EnableHighResolutionClock();
 
     /* Initialize all configured GPIO pins */
     MX_GPIO_Init();
@@ -154,9 +166,9 @@ int main(void)
     /* Print initial startup banner to UART */
     uartPort.print("\r\n");
     uartPort.print("====================================================================\r\n");
-    uartPort.print(" [Team-04] STM32G474RE Nucleo: High-Speed LSM6DS3 CSV Telemetry Stream\r\n");
+    uartPort.print(" [Team-04] STM32G474RE Nucleo: Direct high-rate accelerometer capture\r\n");
     uartPort.print(" SYSCLK: 170 MHz | SPI2: 5.31 MHz | UART: LPUART1 230400 8N1\r\n");
-    uartPort.print(" Rate: 250 Hz (4 ms) | Format: time_ms,ax,ay,az,gx,gy,gz\r\n");
+    uartPort.print(" Capture: XLDA polling, no FIFO, static 2048-sample RAM ring\r\n");
     uartPort.print("====================================================================\r\n\r\n");
 
     /* Probe LSM6DS3 */
@@ -180,10 +192,17 @@ int main(void)
     }
 
     uartPort.print("[SD] Initializing SPI3 SD card...\r\n");
-    const bool sdMounted = sdAdapter.bind() &&
-        FATFS_LinkDriver(&team04::FatFsAdapter::kDriver, "0:") == 0U &&
-        f_mount(&sdFs, "0:", 1) == FR_OK;
-    if (sdMounted && f_open(&sdFile, "0:/imu.csv", FA_OPEN_APPEND | FA_WRITE) == FR_OK) {
+    const bool sdBound = sdAdapter.bind();
+    const uint8_t driverLinked = sdBound
+        ? FATFS_LinkDriver(&team04::FatFsAdapter::kDriver, "0:")
+        : 1U;
+    const FRESULT mountResult = (driverLinked == 0U)
+        ? f_mount(&sdFs, "0:", 1)
+        : FR_NOT_READY;
+    const FRESULT openResult = (mountResult == FR_OK)
+        ? f_open(&sdFile, "0:/imu.csv", FA_OPEN_ALWAYS | FA_WRITE | FA_OPEN_APPEND)
+        : FR_NOT_READY;
+    if (sdBound && driverLinked == 0U && mountResult == FR_OK && openResult == FR_OK) {
         sdFileOpen = true;
         UINT written = 0U;
         if (f_size(&sdFile) == 0U) {
@@ -193,68 +212,48 @@ int main(void)
                 sdFileOpen = false;
             }
         }
-        uartPort.print(sdFileOpen ? "[SD] imu.csv opened for writing.\r\n"
+        uartPort.print(sdFileOpen ? "[SD] imu.csv opened; high-rate path will not write per sample.\r\n"
                                    : "[SD] ERROR: header write failed.\r\n");
     } else {
-        uartPort.print("[SD] ERROR: mount/open failed; UART stream continues.\r\n");
+        uartPort.printf("[SD] ERROR: bind=%u link=%u mount=%u open=%u\r\n",
+                        sdBound ? 1U : 0U,
+                        driverLinked,
+                        static_cast<unsigned>(mountResult),
+                        static_cast<unsigned>(openResult));
     }
 
-    uartPort.print("\r\n[STREAM] Starting high-speed CSV stream (250 Hz)...\r\n");
-    uartPort.print("time_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\r\n");
+    uartPort.print("\r\n[CAPTURE] Direct XLDA polling started; no FIFO, UART, or SD writes in sample path.\r\n");
 
-    uint32_t lastLogTick = HAL_GetTick();
+    static team04::SampleRingBuffer captureBuffer;
     uint32_t sampleCounter = 0U;
+    uint32_t readErrorCounter = 0U;
+    uint32_t lastHeartbeatTick = HAL_GetTick();
 
-    /* Infinite superloop (Non-blocking) */
+    /* High-rate path: poll XLDA, read six accelerometer bytes, store in static RAM. */
     while (1)
     {
-        const uint32_t currentTick = HAL_GetTick();
+        team04::AccelRawData accel{};
+        const team04::IoStatus readStatus = imu.readAccelIfReady(accel);
 
-        /* Stream IMU measurements at 250 Hz (every 4 ms) */
-        if ((currentTick - lastLogTick) >= 4U)
-        {
-            lastLogTick = currentTick;
+        if (readStatus == team04::IoStatus::kOk) {
+            const team04::CaptureSample sample = {
+                sdClock.micros(),
+                sampleCounter++,
+                accel.x,
+                accel.y,
+                accel.z,
+                0U
+            };
+            captureBuffer.push(sample);
+        } else if (readStatus != team04::IoStatus::kNotReady) {
+            ++readErrorCounter;
+        }
 
-            if (!imu.isConfigured()) {
-                /* Periodic auto-recovery if sensor was disconnected */
-                uint8_t probeId = 0U;
-                if (imu.probe(probeId) == team04::IoStatus::kOk &&
-                    imu.configure() == team04::IoStatus::kOk) {
-                    uartPort.print("time_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\r\n");
-                }
-            } else {
-                team04::ImuScaledData imuData{};
-                const team04::IoStatus readStatus = imu.readScaled(imuData);
-
-                if (readStatus == team04::IoStatus::kOk) {
-                    sampleCounter++;
-
-                    /* Format and transmit CSV stream */
-                    uartPort.printf("%lu,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f\r\n",
-                                    currentTick,
-                                    imuData.accelX_g, imuData.accelY_g, imuData.accelZ_g,
-                                    imuData.gyroX_dps, imuData.gyroY_dps, imuData.gyroZ_dps);
-
-                    if (sdFileOpen) {
-                        char line[128];
-                        const int length = snprintf(line, sizeof(line), "%lu,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f\r\n",
-                                                    currentTick,
-                                                    imuData.accelX_g, imuData.accelY_g, imuData.accelZ_g,
-                                                    imuData.gyroX_dps, imuData.gyroY_dps, imuData.gyroZ_dps);
-                        if (length <= 0 || !SD_Append(&sdFile, line)) {
-                            uartPort.print("[SD] ERROR: file write failed.\r\n");
-                            sdFileOpen = false;
-                        } else if ((sampleCounter % 125U) == 0U) {
-                            (void)f_sync(&sdFile);
-                        }
-                    }
-
-                    /* Toggle heartbeat LED once every 125 samples (~every 500 ms) */
-                    if ((sampleCounter % 125U) == 0U) {
-                        HAL_GPIO_TogglePin(LED_GPIO_PORT, LED_PIN);
-                    }
-                }
-            }
+        /* Diagnostic heartbeat only; it does not transmit and does not block sampling. */
+        const uint32_t now = HAL_GetTick();
+        if ((now - lastHeartbeatTick) >= 500U) {
+            HAL_GPIO_TogglePin(LED_GPIO_PORT, LED_PIN);
+            lastHeartbeatTick = now;
         }
     }
 }
@@ -424,14 +423,6 @@ static void MX_SPI3_Init(void)
     hspi3.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
     hspi3.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
     if (HAL_SPI_Init(&hspi3) != HAL_OK) Error_Handler();
-}
-
-static bool SD_Append(FIL* file, const char* text)
-{
-    if (!file || !text) return false;
-    const UINT length = static_cast<UINT>(strlen(text));
-    UINT written = 0U;
-    return f_write(file, text, length, &written) == FR_OK && written == length;
 }
 
 /**

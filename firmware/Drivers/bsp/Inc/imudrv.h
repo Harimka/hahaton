@@ -37,6 +37,15 @@ struct ImuScaledData {
 };
 
 /**
+ * @brief Raw accelerometer-only measurement for the high-rate capture path.
+ */
+struct AccelRawData {
+    int16_t x;
+    int16_t y;
+    int16_t z;
+};
+
+/**
  * @brief Abstract IMU (Accelerometer + Gyroscope) driver.
  */
 class ImuDrv {

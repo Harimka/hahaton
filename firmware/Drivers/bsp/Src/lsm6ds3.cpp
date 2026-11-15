@@ -148,6 +148,34 @@ IoStatus Lsm6ds3::readStatus(uint8_t& status)
     return readRegister(kRegStatus, &status, 1U);
 }
 
+IoStatus Lsm6ds3::readAccelIfReady(AccelRawData& raw)
+{
+    if (!isConfigured_) {
+        return IoStatus::kNotReady;
+    }
+
+    uint8_t status = 0U;
+    IoStatus result = readStatus(status);
+    if (result != IoStatus::kOk) {
+        return result;
+    }
+
+    if ((status & 0x01U) == 0U) {
+        return IoStatus::kNotReady;
+    }
+
+    uint8_t data[6] = {};
+    result = readRegister(kRegOutX_L_XL, data, sizeof(data));
+    if (result != IoStatus::kOk) {
+        return result;
+    }
+
+    raw.x = decodeWord(&data[0]);
+    raw.y = decodeWord(&data[2]);
+    raw.z = decodeWord(&data[4]);
+    return IoStatus::kOk;
+}
+
 IoStatus Lsm6ds3::readRaw(ImuRawData& raw)
 {
     if (!isConfigured_) {

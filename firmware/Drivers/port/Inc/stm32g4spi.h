@@ -27,6 +27,8 @@ public:
     void select() override;
     void deselect() override;
     IoStatus transfer(const uint8_t* tx, uint8_t* rx, uint16_t len, uint32_t timeoutMs) override;
+    IoStatus startDma(const uint8_t* tx, uint8_t* rx, uint16_t len) override;
+    IoStatus abortDma() override;
 
 private:
     SPI_HandleTypeDef& spi_;

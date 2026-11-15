@@ -132,6 +132,19 @@ IoStatus Stm32G4Spi::transfer(const uint8_t* tx, uint8_t* rx, uint16_t len, uint
     return IoStatus::kOk;
 }
 
+IoStatus Stm32G4Spi::startDma(const uint8_t* tx, uint8_t* rx, uint16_t len)
+{
+    (void)tx;
+    (void)rx;
+    (void)len;
+    return IoStatus::kUnsupported;
+}
+
+IoStatus Stm32G4Spi::abortDma()
+{
+    return IoStatus::kUnsupported;
+}
+
 } // namespace team04
 
 /***************************** END OF FILE ************************************/

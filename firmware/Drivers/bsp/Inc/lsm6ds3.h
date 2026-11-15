@@ -46,6 +46,12 @@ public:
     IoStatus readStatus(uint8_t& status);
 
     /**
+     * @brief Poll XLDA and read one accelerometer sample without using FIFO.
+     * @return kOk when a fresh sample was read, kNotReady when XLDA is clear.
+     */
+    IoStatus readAccelIfReady(AccelRawData& raw);
+
+    /**
      * @brief Read raw 16-bit 6-axis measurements.
      */
     IoStatus readRaw(ImuRawData& raw) override;
