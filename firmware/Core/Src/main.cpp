@@ -161,7 +161,6 @@ int main(void)
     team04::FatFsAdapter sdAdapter(sdCard);
     FATFS sdFs{};
     FIL sdFile{};
-    bool sdFileOpen = false;
 
     /* Print initial startup banner to UART */
     uartPort.print("\r\n");
@@ -199,27 +198,61 @@ int main(void)
     const FRESULT mountResult = (driverLinked == 0U)
         ? f_mount(&sdFs, "0:", 1)
         : FR_NOT_READY;
-    const FRESULT openResult = (mountResult == FR_OK)
-        ? f_open(&sdFile, "0:/imu.csv", FA_OPEN_ALWAYS | FA_WRITE | FA_OPEN_APPEND)
-        : FR_NOT_READY;
-    if (sdBound && driverLinked == 0U && mountResult == FR_OK && openResult == FR_OK) {
-        sdFileOpen = true;
-        UINT written = 0U;
-        if (f_size(&sdFile) == 0U) {
-            const char* header = "time_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\r\n";
-            if (f_write(&sdFile, header, static_cast<UINT>(strlen(header)), &written) != FR_OK ||
-                written != static_cast<UINT>(strlen(header))) {
-                sdFileOpen = false;
+    const char* const sdTestPath = "0:/SDTEST.TXT";
+    const char* const sdTestPayload = "team04-sd-smoke-test-v1\r\n";
+    const UINT sdTestLength = static_cast<UINT>(strlen(sdTestPayload));
+    FRESULT sdTestResult = mountResult;
+    bool sdTestPassed = false;
+
+    if (sdBound && driverLinked == 0U && mountResult == FR_OK) {
+        UINT bytesWritten = 0U;
+        UINT bytesRead = 0U;
+        char readback[sizeof("team04-sd-smoke-test-v1\r\n")] = {};
+
+        sdTestResult = f_open(&sdFile, sdTestPath, FA_CREATE_ALWAYS | FA_WRITE);
+        if (sdTestResult == FR_OK) {
+            sdTestResult = f_write(&sdFile, sdTestPayload, sdTestLength, &bytesWritten);
+            if (sdTestResult == FR_OK && bytesWritten != sdTestLength) {
+                sdTestResult = FR_DISK_ERR;
+            }
+            if (sdTestResult == FR_OK) {
+                sdTestResult = f_sync(&sdFile);
+            }
+            const FRESULT closeResult = f_close(&sdFile);
+            if (sdTestResult == FR_OK) {
+                sdTestResult = closeResult;
             }
         }
-        uartPort.print(sdFileOpen ? "[SD] imu.csv opened; high-rate path will not write per sample.\r\n"
-                                   : "[SD] ERROR: header write failed.\r\n");
+
+        if (sdTestResult == FR_OK) {
+            sdTestResult = f_open(&sdFile, sdTestPath, FA_READ);
+        }
+        if (sdTestResult == FR_OK) {
+            sdTestResult = f_read(&sdFile, readback, sdTestLength, &bytesRead);
+            if (sdTestResult == FR_OK && bytesRead != sdTestLength) {
+                sdTestResult = FR_INT_ERR;
+            }
+            if (sdTestResult == FR_OK && memcmp(readback, sdTestPayload, sdTestLength) != 0) {
+                sdTestResult = FR_INT_ERR;
+            }
+            const FRESULT closeResult = f_close(&sdFile);
+            if (sdTestResult == FR_OK) {
+                sdTestResult = closeResult;
+            }
+        }
+
+        sdTestPassed = sdTestResult == FR_OK;
+    }
+
+    if (sdTestPassed) {
+        uartPort.printf("[SD TEST] PASS: wrote and verified %u bytes in SDTEST.TXT\r\n",
+                        sdTestLength);
     } else {
-        uartPort.printf("[SD] ERROR: bind=%u link=%u mount=%u open=%u\r\n",
+        uartPort.printf("[SD TEST] FAIL: bind=%u link=%u mount=%u result=%u\r\n",
                         sdBound ? 1U : 0U,
                         driverLinked,
                         static_cast<unsigned>(mountResult),
-                        static_cast<unsigned>(openResult));
+                        static_cast<unsigned>(sdTestResult));
     }
 
     uartPort.print("\r\n[CAPTURE] Direct XLDA polling started; no FIFO, UART, or SD writes in sample path.\r\n");
