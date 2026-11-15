@@ -1,97 +1,97 @@
 ---
 name: gitlab_workflow
-description: Стандарт и регламент синхронизации кода, коммитов и Merge Request в GitLab репозиторий проекта (gl.hakaton.1440.space).
+description: Полный регламент работы с Git и GitLab (gl.hakaton.1440.space) для агентов: песочница Windows, CRLF, кириллица, URL-encoding и Protected main.
 ---
 
-# Регламент работы с GitLab репозиторием (GitLab Workflow Protocol)
+# Регламент Git & GitLab Workflow для Team-04
 
-Данный документ описывает правила и точную последовательность шагов для отправки коммитов и веток в GitLab (`gl.hakaton.1440.space`).
+> **Цель:** Исключить повторение ошибок при коммитах, слияниях и отправке кода в репозитории проекта на платформе Windows и в изолированной песочнице агентов.
 
 ---
 
-## 1. Ключевые особенности и ограничения окружения
+## 1. Архитектура репозиториев
 
-### 1.1. URL-Encoding логина (Символ `@` в email)
-* При передаче логина в формате email (`stage1-team4-5@example.invalid`) в URL репозитория символ `@` **обязательно** экранируется как `%40`:
-  ```bash
-  # ПРАВИЛЬНО:
-  https://stage1-team4-5%40example.invalid:PASSWORD@gl.hakaton.1440.space/hackathon-2026/stage-1/team-04.git
+| Remote | URL | Рабочая ветка | Назначение |
+|---|---|---|---|
+| **`origin`** | `https://github.com/Harimka/hahaton.git` | `developV2` | Основной командный репозиторий (разработка, задачи) |
+| **`gitlab`** | `https://gl.hakaton.1440.space/hackathon-2026/stage-1/team-04.git` | `main` / `developv2` | Официальный репозиторий хакатона для проверки жюри |
 
-  # ОШИБКА (git воспримет часть email как хост):
-  https://stage1-team4-5@example.invalid:PASSWORD@gl.hakaton.1440.space/...
+---
+
+## 2. Почему возникали задержки и ошибки (Разбор граблей)
+
+При первой попытке коммитов возникли 5 независимых барьеров, которые привели к серии повторных попыток:
+
+### 1. Изоляция песочницы (Sandbox Isolation)
+* **Проблема:** По умолчанию терминал агента запускается в изолированном режиме (`BypassSandbox: false`). В этом режиме **полностью заблокирован сетевой стек** (ошибка `getaddrinfo() thread failed to start`) и запрещена запись в служебный каталог `.git` (`Permission denied: could not lock config file`).
+* **Решение:** Все команды Git, обращающиеся к сети (`fetch`, `push`) или модифицирующие репозиторий (`commit`, `checkout`, `merge`, `remote add`), **обязательно** запускаются с `BypassSandbox: true`.
+
+### 2. Защита ветки `main` в GitLab (Protected Branch)
+* **Проблема:** Серверный хук GitLab отклонил прямой пуш:
+  ```text
+  remote: GitLab: You are not allowed to push code to protected branches on this project.
+  ! [remote rejected] main -> main (pre-receive hook declined)
+  ```
+* **Решение:** Разработчики не имеют права напрямую перезаписывать `main`. В `main` код доставляется **только через Merge Request**!
+
+### 3. Символ `@` в логине (Email в URL)
+* **Проблема:** Логин выдан в виде email (`stage1-team4-5@example.invalid`). Если подставить его в URL напрямую, Git и HTTP-клиенты парсят часть после `@` как имя хоста.
+* **Решение:** Символ `@` в логине **всегда экранируется как `%40`**:
+  ```text
+  https://stage1-team4-5%40example.invalid:PASSWORD@gl.hakaton.1440.space/...
   ```
 
-### 1.2. Доступ к сети и каталогу `.git` (Sandbox Bypass)
-* В изолированном окружении терминала запись в каталог `.git` и обращение по HTTPS блокируются политикой изоляции.
-* Все команды, изменяющие состояние `.git` (`git commit`, `git checkout`, `git merge`, `git remote add`) или обращающиеся к сети (`git push`, `git fetch`), должны выполняться с отключенной изоляцией (`BypassSandbox: true`).
-
-### 1.3. Защита ветки `main` (Protected Branch)
-* В репозитории GitLab ветка `main` является защищенной (`Protected`).
-* Прямой пуш (`git push gitlab main`) **запрещен** серверным хуком:
-  `remote: GitLab: You are not allowed to push code to protected branches on this project.`
-* Все изменения в `main` должны поступать **исключительно через Merge Request**!
-
-### 1.4. Несвязанные истории коммитов (Unrelated Histories)
-* Репозиторий на GitLab и локальный репозиторий могут иметь независимые корневые коммиты (например, в GitLab через веб-интерфейс была загружена папка `СХЕМОТЕХНИКА`, а локально создана структура прошивки).
-* При слиянии обязательно указывать флаг:
+### 4. Несвязанные истории коммитов (Unrelated Histories)
+* **Проблема:** Репозиторий на GitLab был инициализирован отдельно от локального (в него через браузер загрузили файлы схемотехники `СХЕМОТЕХНИКА/` и pdf). У локальной ветки и ветки `gitlab/main` не было общего корня (`merge-base` возвращал ошибку).
+* **Решение:** Слияние выполняется с флагом `--allow-unrelated-histories`:
   ```bash
-  git merge <branch> --allow-unrelated-histories -m "..."
+  git merge developV2 --allow-unrelated-histories
   ```
+
+### 5. Алиасы PowerShell и переводы строк CRLF
+* **Проблема:** В PowerShell команда `curl` является псевдонимом `Invoke-WebRequest`, а Windows Git по умолчанию ругается на CRLF в файлах ST HAL.
+* **Решение:** Вызывать бинарник напрямую (`curl.exe`), а в git настроить `core.autocrlf true` и `core.quotepath false`.
 
 ---
 
-## 2. Стандартный алгоритм внесения изменений и доставки в `main`
+## 3. Пошаговый стандарт (SOP) отправки изменений
 
-### Шаг 1. Проверка и фиксация изменений в рабочей ветке (`developV2`)
-```bash
-git status
-git add <files>
-git commit -m "feat: <Краткое описание на английском>"
+### Шаг 1: Фиксация изменений в рабочей ветке
+```powershell
+# 1. Проверяем статус
+git status --short
+
+# 2. Добавляем измененные файлы (без build/ и временных логов!)
+git add <файлы>
+
+# 3. Делаем коммит по Conventional Commits (на английском)
+git commit -m "feat(module): description of changes"
 ```
 
-### Шаг 2. Заливка ветки в GitLab
-```bash
-# Пуш в ветку на GitLab
+### Шаг 2: Отправка в командный GitHub
+```powershell
+git push origin developV2
+```
+
+### Шаг 3: Отправка в ветку разработки GitLab
+```powershell
 git push gitlab developV2:developv2
 ```
 
-### Шаг 3. Интеграция с GitLab `main` (если требуется обновление `main`)
-Поскольку ветка `main` защищена от прямой записи:
-1. Забираем актуальное состояние `main` из GitLab:
-   ```bash
-   git fetch gitlab
-   ```
-2. Создаем временную интеграционную ветку от `gitlab/main`:
-   ```bash
-   git checkout -B integrate-to-main gitlab/main
-   ```
-3. Выполняем чистое слияние с рабочей веткой (с сохранением схемотехники и документации):
-   ```bash
-   git merge developV2 --allow-unrelated-histories -m "feat: Integrate <module> into main"
-   ```
-4. Отправляем интеграционную ветку с автоматическим созданием Merge Request через Git Push Options:
-   ```bash
-   git push -o merge_request.create -o merge_request.target=main -o merge_request.title="feat: Integrate changes into main" gitlab integrate-to-main
-   ```
+### Шаг 4: Доставка в защищенный `main` через автоматический Merge Request
+Чтобы обновить судейский `main`, отправляем ветку с push-опцией создания MR:
+```powershell
+# Вариант А: Автоматическое создание MR через Git Push Options
+git push -o merge_request.create -o merge_request.target=main -o merge_request.title="feat: Integrate developv2 into main" gitlab developV2:integrate-main
 
-### Шаг 4. Принятие Merge Request
-* В консоли пуша GitLab возвращает ссылку на созданный MR вида:
-  `https://gl.hakaton.1440.space/hackathon-2026/stage-1/team-04/-/merge_requests/<ID>`
-* Разработчик или агент подтверждает слияние (нажатием кнопки Merge в веб-интерфейсе либо через API).
-* После слияния локальная ветка `main` синхронизируется:
-  ```bash
-  git checkout main
-  git pull --ff-only gitlab main
-  ```
-* Временная ветка в GitLab удаляется:
-  ```bash
-  git push gitlab --delete integrate-to-main
-  ```
+# Вариант Б: Принятие MR
+# Перейдите по ссылке, выведенной GitLab в терминал, и нажмите кнопку 'Merge'.
+```
 
 ---
 
-## 3. Чек-лист перед коммитом
-- [ ] Все временные файлы логов (`*.log`, `build/`) добавлены в `.gitignore`.
-- [ ] Исходный код прошивки компилируется без ошибок (`build.bat`).
-- [ ] Соблюдены правила Doxygen-шапки (`@file`, `@author team-04`) и C++17 архитектуры.
-- [ ] Файлы схемотехники и документации других участников команды не удалены.
+## 4. Чек-лист перед коммитом
+- [ ] Параметр команды установлен в `BypassSandbox: true` (для сетевых и пишущих git-команд).
+- [ ] В индекс не попали файлы из `firmware/build/`, `*.log`, `*.elf`, `*.hex`.
+- [ ] Проект компилируется локально (`build.bat` возвращает код 0).
+- [ ] Сохранены файлы схемотехники и документация других участников.
